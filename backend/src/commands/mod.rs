@@ -7,13 +7,12 @@ pub mod custom;
 
 use crate::AppState;
 use crate::audio::AudioDevice;
-use crate::cloud::{self, GroqClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
+use crate::cloud::{self, VoiceClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
 use crate::config::{
     LanguagePreferences,
     LocalApiSettings,
     VibeActivationMode,
     VibeCodingConfig,
-    VibeDetailLevel,
     VibeTargetTool,
 };
 use serde::{Deserialize, Serialize};
@@ -93,23 +92,11 @@ const SUPPORTED_TARGET_LANGUAGES: &[&str] = &[
     "en", "hi", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko", "ar",
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MultilingualRewrite {
-    routing_text_english: Option<String>,
-    output_text_target: Option<String>,
-    detected_language: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct MultilingualTextResult {
     routing_text: String,
     output_text: String,
     transformed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct VibeEnhancementRewrite {
-    enhanced_prompt: Option<String>,
 }
 
 fn normalize_language_code(raw: &str, allow_auto: bool) -> String {
@@ -140,25 +127,6 @@ fn normalized_language_preferences(preferences: &LanguagePreferences) -> Languag
     LanguagePreferences {
         source_language: normalize_language_code(&preferences.source_language, true),
         target_language: normalize_language_code(&preferences.target_language, false),
-    }
-}
-
-fn language_name(code: &str) -> &str {
-    match code {
-        "auto" => "Auto-detect",
-        "en" => "English",
-        "hi" => "Hindi",
-        "es" => "Spanish",
-        "fr" => "French",
-        "de" => "German",
-        "it" => "Italian",
-        "pt" => "Portuguese",
-        "ru" => "Russian",
-        "zh" => "Chinese",
-        "ja" => "Japanese",
-        "ko" => "Korean",
-        "ar" => "Arabic",
-        _ => "Unknown",
     }
 }
 
@@ -206,75 +174,10 @@ async fn transform_multilingual_text(
         });
     }
 
-    let api_key = cloud::get_groq_key();
-    if api_key.trim().is_empty() {
-        return Err("Missing GROQ_API_KEY for multilingual transform".to_string());
-    }
-
-    let source_code = preferences.source_language.as_str();
-    let target_code = preferences.target_language.as_str();
-    let source_name = language_name(source_code);
-    let target_name = language_name(target_code);
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .bearer_auth(api_key)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": "llama-3.3-70b-versatile",
-            "temperature": 0.1,
-            "max_tokens": 320,
-            "response_format": { "type": "json_object" },
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You normalize multilingual voice transcriptions for an OS assistant. Return STRICT JSON with keys routing_text_english, output_text_target, detected_language. routing_text_english must be concise English preserving intent for command parsing. output_text_target must be polished in the requested target language with corrected grammar/punctuation and no extra commentary. If target language is English, output_text_target MUST be English. If source language is auto, detect language from the transcript; handle romanized speech (e.g., Hinglish written in Latin script) and still translate correctly."
-                },
-                {
-                    "role": "user",
-                    "content": format!(
-                        "source_language: {} ({})\ntarget_language: {} ({})\ntranscription: {}",
-                        source_code, source_name, target_code, target_name, base
-                    )
-                }
-            ]
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Multilingual transform request failed: {}", e))?;
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(format!("Multilingual transform failed [{}]: {}", status, body));
-    }
-
-    let parsed: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse multilingual transform response: {}", e))?;
-    let content = parsed["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("{}")
-        .trim();
-
-    let rewrite: MultilingualRewrite = serde_json::from_str(content)
-        .map_err(|e| format!("Failed to parse multilingual rewrite payload: {}", e))?;
-
-    let routing = rewrite
-        .routing_text_english
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let output = rewrite
-        .output_text_target
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-
     Ok(MultilingualTextResult {
-        routing_text: if routing.is_empty() { base.to_string() } else { routing },
-        output_text: if output.is_empty() { base.to_string() } else { output },
-        transformed: true,
+        routing_text: base.to_string(),
+        output_text: base.to_string(),
+        transformed: false,
     })
 }
 
@@ -573,123 +476,9 @@ async fn enhance_vibe_coding_prompt(
         return Err("Vibe enhancement skipped: empty text".to_string());
     }
 
-    let api_key = cloud::get_groq_key();
-    if api_key.trim().is_empty() {
-        return Err("Missing GROQ_API_KEY for vibe prompt enhancement".to_string());
-    }
-
-    let detail_instruction = match vibe_config.detail_level {
-        VibeDetailLevel::Concise => {
-            "Keep the prompt compact: one short objective plus minimal bullet points."
-        }
-        VibeDetailLevel::Balanced => {
-            "Provide a clear objective and practical implementation notes without overexplaining."
-        }
-        VibeDetailLevel::Detailed => {
-            "Provide a full implementation brief with concrete steps and explicit edge cases."
-        }
-    };
-
-    let word_count = base.split_whitespace().count();
-    let dynamic_shape_instruction = if word_count <= 10 {
-        "Input is short: produce a compact prompt with a single clear objective and only essential constraints."
-    } else if word_count <= 28 {
-        "Input has moderate detail: produce a structured prompt with clear scope and practical implementation notes."
-    } else {
-        "Input is detailed: preserve key requirements, organize into clear sections, and avoid dropping constraints."
-    };
-
-    let mut sections: Vec<&str> = vec!["Task"];
-    if vibe_config.include_constraints {
-        sections.push("Constraints");
-    }
-    if vibe_config.include_acceptance_criteria {
-        sections.push("Acceptance Criteria");
-    }
-    if vibe_config.include_test_notes {
-        sections.push("Validation Checklist");
-    }
-
-    let target_language = language_name(&language_preferences.target_language);
-    let target_tool = vibe_target_tool_name(vibe_config.target_tool);
-    let concise_preference = if vibe_config.concise_output {
-        "Prioritize short wording and avoid unnecessary filler."
-    } else {
-        "Be explicit when needed, but keep the prompt practical and direct."
-    };
-    let section_line = format!("Use these sections when relevant: {}.", sections.join(", "));
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .bearer_auth(api_key)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": "llama-3.3-70b-versatile",
-            "temperature": 0.2,
-            "max_tokens": 520,
-            "response_format": { "type": "json_object" },
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You rewrite rough spoken coding ideas into high-quality prompts for AI coding assistants. Preserve user intent, avoid hype, and never invent missing requirements. Keep output actionable, concrete, and scoped. Return STRICT JSON: {\"enhanced_prompt\":\"...\"}. No markdown fences. No extra keys."
-                },
-                {
-                    "role": "user",
-                    "content": format!(
-                        "target_tool: {}\ntarget_language: {}\ndetail_level: {:?}\n{}\n{}\n{}\n{}\nspoken_text: {}",
-                        target_tool,
-                        target_language,
-                        vibe_config.detail_level,
-                        detail_instruction,
-                        concise_preference,
-                        section_line,
-                        dynamic_shape_instruction,
-                        base
-                    )
-                }
-            ]
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Vibe enhancement request failed: {}", e))?;
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(format!("Vibe enhancement failed [{}]: {}", status, body));
-    }
-
-    let parsed: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse vibe enhancement response: {}", e))?;
-
-    let content = parsed["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .trim();
-    if content.is_empty() {
-        return Err("Vibe enhancement returned empty content".to_string());
-    }
-
-    let cleaned_content = content
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-
-    let rewrite: VibeEnhancementRewrite = serde_json::from_str(cleaned_content)
-        .map_err(|e| format!("Failed to parse vibe enhancement payload: {}", e))?;
-    let enhanced = rewrite
-        .enhanced_prompt
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-
-    if enhanced.is_empty() {
-        return Err("Vibe enhancement returned an empty prompt".to_string());
-    }
-
-    Ok(enhanced)
+    let _ = language_preferences;
+    let _ = vibe_config;
+    Ok(base.to_string())
 }
 
 // ============ Core Voice Commands ============
@@ -760,7 +549,7 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
     Ok(true)
 }
 
-/// Stop listening and process audio with Groq AI
+/// Stop listening and process audio
 #[tauri::command]
 pub async fn stop_listening(
     state: State<'_, AppState>,
@@ -787,8 +576,8 @@ pub async fn stop_listening(
         streamer.stop_streaming();
     }
     
-    // Wait for final chunks
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    // Brief yield for final audio chunks to flush
+    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
     // Set processing state
     {
@@ -860,26 +649,17 @@ pub async fn stop_listening(
         .transcription_language_hint()
         .map(|s| s.to_string());
 
-    // Transcription strategy:
-    // 1) Try backend API (recommended for centralized auth/rate policies)
-    // 2) Fallback to direct Groq call if server is unavailable/misconfigured
     let mut transcription = {
-        let server_transcription = if use_remote_api() {
-            let api_client = state.api_client.lock().await;
-            api_client
-                .transcribe(
-                    &wav_data,
-                    Some(&dictionary_hints),
-                    transcription_language_hint.as_deref(),
-                )
-                .await
-        } else {
-            Err("remote API disabled".to_string())
-        };
-
-        match server_transcription {
+        let voice_client = VoiceClient::new();
+        match voice_client
+            .transcribe_with_hints(
+                &wav_data,
+                &dictionary_hints,
+                transcription_language_hint.as_deref(),
+            )
+            .await
+        {
             Ok(result) => {
-                log::info!("Server transcription: {}", result.text);
                 TranscriptionResult {
                     text: result.text,
                     duration_ms,
@@ -887,53 +667,19 @@ pub async fn stop_listening(
                     is_final: result.is_final,
                 }
             }
-            Err(server_err) => {
-                if server_err == "remote API disabled" {
-                    log::info!("Remote API disabled, using direct Groq transcription");
-                } else {
-                    log::warn!(
-                        "Server transcription failed, attempting direct Groq fallback: {}",
-                        server_err
+            Err(transcription_err) => {
+                log::error!("Transcription failed: {}", transcription_err);
+                {
+                    let mut error_log = state.error_log.lock().await;
+                    error_log.log_error_with_details(
+                        crate::error_log::ErrorType::Transcription,
+                        "Voice transcription failed",
+                        transcription_err.clone(),
                     );
                 }
-
-                let groq_client = GroqClient::new();
-                match groq_client
-                    .transcribe_with_hints(
-                        &wav_data,
-                        &dictionary_hints,
-                        transcription_language_hint.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(result) => {
-                        log::info!("Direct Groq fallback transcription succeeded");
-                        TranscriptionResult {
-                            text: result.text,
-                            duration_ms,
-                            confidence: result.confidence,
-                            is_final: result.is_final,
-                        }
-                    }
-                    Err(groq_err) => {
-                        let combined = format!(
-                            "server error: {}; groq fallback error: {}",
-                            server_err, groq_err
-                        );
-                        log::error!("Transcription failed: {}", combined);
-                        {
-                            let mut error_log = state.error_log.lock().await;
-                            error_log.log_error_with_details(
-                                crate::error_log::ErrorType::Transcription,
-                                "Voice transcription failed",
-                                combined.clone(),
-                            );
-                        }
-                        let mut is_processing = state.is_processing.lock().await;
-                        *is_processing = false;
-                        return Err(format!("Transcription failed: {}", combined));
-                    }
-                }
+                let mut is_processing = state.is_processing.lock().await;
+                *is_processing = false;
+                return Err(format!("Transcription failed: {}", transcription_err));
             }
         }
     };
@@ -1058,252 +804,51 @@ pub async fn stop_listening(
         );
     }
 
-    // Get conversation context for multi-turn dialogues
+    // Update conversation history and capture session id.
     let (conv_context, session_id) = {
         let mut conversation = state.conversation.lock().await;
-        
+
         // Add user message to conversation
         conversation.add_user_message(transcription.text.clone());
-        
-        // Build conversation context for LLM
-        let clipboard_preview = {
-            let clipboard = state.clipboard.lock().await;
-            clipboard.get_preview(200).ok()
-        };
-        
-        // Load custom commands for context
-        let custom_commands = match custom::CustomCommandsStore::new() {
-            Ok(store) => {
-                store.get_enabled_commands()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|c| (c.trigger_phrase, c.name, c.id))
-                    .collect()
-            }
-            Err(_) => Vec::new()
-        };
-        
-        // Load snippets for context
-        let snippets = match crate::snippets::SnippetsStore::new() {
-            Ok(store) => {
-                store.get_all_snippets()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|s| (s.trigger, s.expansion))
-                    .collect()
-            }
-            Err(_) => Vec::new()
-        };
-        
-        // Determine dictation style based on active app
-        let dictation_style = {
-            let config = state.config.lock().await;
-            let active_app = context.active_app.as_ref().map(|s| s.to_lowercase());
-            
-            let style_config = &config.dictation_style;
-            
-            // Detect app category based on name
-            let config_style = match active_app.as_deref() {
-                // Personal messengers
-                Some(app) if app.contains("whatsapp") || app.contains("messenger") || 
-                             app.contains("telegram") || app.contains("imessage") ||
-                             app.contains("signal") || app.contains("discord") => style_config.personal,
-                // Work apps
-                Some(app) if app.contains("slack") || app.contains("teams") || 
-                             app.contains("zoom") => style_config.work,
-                // Email
-                Some(app) if app.contains("mail") || app.contains("outlook") || 
-                             app.contains("gmail") || app.contains("thunderbird") => style_config.email,
-                // Default
-                _ => style_config.other,
-            };
-            
-            // Convert config style to cloud style
-            match config_style {
-                crate::config::DictationStyle::Formal => cloud::DictationStyle::Formal,
-                crate::config::DictationStyle::Casual => cloud::DictationStyle::Casual,
-                crate::config::DictationStyle::VeryCasual => cloud::DictationStyle::VeryCasual,
-            }
-        };
-        
-        let ctx = ConversationContext {
-            history: conversation.format_for_llm(),
-            last_action: conversation.last_action.clone(),
-            last_payload: conversation.last_action_payload.clone(),
-            clipboard_preview,
-            user_facts: conversation.extracted_facts.iter()
-                .map(|f| format!("{}: {}", f.key, f.value))
-                .collect(),
-            custom_commands,
-            snippets,
-            dictation_style,
-        };
-        
-        (ctx, conversation.session_id.clone())
+
+        (ConversationContext::default(), conversation.session_id.clone())
     };
 
     let local_router_action = cloud::detect_local_command(&intent_text);
 
-    let question_action = if local_router_action.is_none() && should_handle_as_question(&intent_text, &context) {
-        match build_question_response_action(&intent_text, &conv_context).await {
-            Ok(action) => {
-                log::info!("Question router selected local Q&A response");
-                Some(action)
-            }
-            Err(e) => {
-                log::warn!("Question router failed, falling back to normal intent routing: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     // Intent routing:
     // 1) Deterministic local router first for explicit command phrases
-    // 2) If cloud routing is enabled, use server intent
-    // 3) If cloud routing is disabled (fully local), use direct Groq intent
-    // 4) If server intent fails, fallback to direct Groq intent before dictation
+    // 2) Use local intent parser
+    // 3) On failure, default to dictation
     let resolve_intent_action = || async {
-        let map_server_action = |result: crate::api_client::ActionResponse| -> ActionResult {
-            let action_type = match result.action_type.as_str() {
-                "TypeText" => ActionType::TypeText,
-                "RunCommand" => ActionType::RunCommand,
-                "OpenApp" => ActionType::OpenApp,
-                "OpenUrl" => ActionType::OpenUrl,
-                "WebSearch" => ActionType::WebSearch,
-                "VolumeControl" => ActionType::VolumeControl,
-                "SystemControl" => ActionType::SystemControl,
-                "SpotifyControl" => ActionType::SpotifyControl,
-                "KeyboardShortcut" => ActionType::KeyboardShortcut,
-                "WindowControl" => ActionType::WindowControl,
-                "Respond" => ActionType::Respond,
-                "Clarify" => ActionType::Clarify,
-                "NoAction" => ActionType::NoAction,
-                _ => ActionType::TypeText,
-            };
-            ActionResult {
-                action_type,
-                payload: result.payload,
-                refined_text: result.refined_text,
-                response_text: result.response_text,
-                requires_confirmation: result.requires_confirmation,
+        let voice_client = VoiceClient::new();
+        match voice_client
+            .process_intent_with_context(&intent_text, &context, &conv_context)
+            .await
+        {
+            Ok(action) => {
+                log::info!("Local intent action: {:?}", action.action_type);
+                action
             }
-        };
-
-        if !use_remote_api() {
-            let groq_client = GroqClient::new();
-            match groq_client
-                .process_intent_with_context(&intent_text, &context, &conv_context)
-                .await
-            {
-                Ok(action) => {
-                    log::info!(
-                        "Direct Groq intent action (cloud routing disabled): {:?}",
-                        action.action_type
-                    );
-                    return action;
-                }
-                Err(local_err) => {
-                    log::warn!(
-                        "Direct Groq intent failed (cloud routing disabled), defaulting to dictation: {}",
-                        local_err
-                    );
-                    {
-                        let mut error_log = state.error_log.lock().await;
-                        error_log.log_error_with_details(
-                            crate::error_log::ErrorType::LLMProcessing,
-                            "AI processing unavailable, using dictation mode",
-                            local_err.clone(),
-                        );
-                    }
-                    return ActionResult {
-                        action_type: ActionType::TypeText,
-                        payload: serde_json::json!({}),
-                        refined_text: Some(transcription.text.clone()),
-                        response_text: None,
-                        requires_confirmation: false,
-                    };
-                }
-            }
-        }
-
-        let api_client = state.api_client.lock().await;
-
-        // Build request for server API
-        let process_request = crate::api_client::ProcessRequest {
-            text: intent_text.clone(),
-            context: Some(crate::api_client::VoiceContext {
-                active_app: context.active_app.clone(),
-                selected_text: context.selected_text.clone(),
-                os: context.os.clone(),
-                mode: match context.mode {
-                    cloud::VoiceMode::Dictation => "Dictation".to_string(),
-                    cloud::VoiceMode::Command => "Command".to_string(),
-                },
-            }),
-            conversation_history: Some(conv_context.history.clone()),
-            custom_commands: Some(
-                conv_context
-                    .custom_commands
-                    .iter()
-                    .map(|(trigger, name, id)| crate::api_client::CustomCommand {
-                        trigger: trigger.clone(),
-                        name: name.clone(),
-                        id: id.clone(),
-                    })
-                    .collect(),
-            ),
-            dictation_style: Some(match conv_context.dictation_style {
-                cloud::DictationStyle::Formal => "Formal".to_string(),
-                cloud::DictationStyle::Casual => "Casual".to_string(),
-                cloud::DictationStyle::VeryCasual => "VeryCasual".to_string(),
-            }),
-        };
-
-        match api_client.process_intent(process_request).await {
-            Ok(result) => {
-                log::info!("Server action: {}", result.action_type);
-                map_server_action(result)
-            }
-            Err(e) => {
+            Err(local_err) => {
                 log::warn!(
-                    "Server processing failed, attempting direct Groq fallback: {}",
-                    e
+                    "Local intent failed, defaulting to dictation: {}",
+                    local_err
                 );
-                let groq_client = GroqClient::new();
-                match groq_client
-                    .process_intent_with_context(&intent_text, &context, &conv_context)
-                    .await
                 {
-                    Ok(action) => {
-                        log::info!(
-                            "Direct Groq intent action (server fallback): {:?}",
-                            action.action_type
-                        );
-                        action
-                    }
-                    Err(local_err) => {
-                        log::warn!(
-                            "Direct Groq intent failed (server fallback), defaulting to dictation: {}",
-                            local_err
-                        );
-                        {
-                            let mut error_log = state.error_log.lock().await;
-                            error_log.log_error_with_details(
-                                crate::error_log::ErrorType::LLMProcessing,
-                                "AI processing unavailable, using dictation mode",
-                                format!("server error: {}; groq fallback error: {}", e, local_err),
-                            );
-                        }
-                        ActionResult {
-                            action_type: ActionType::TypeText,
-                            payload: serde_json::json!({}),
-                            refined_text: Some(transcription.text.clone()),
-                            response_text: None,
-                            requires_confirmation: false,
-                        }
-                    }
+                    let mut error_log = state.error_log.lock().await;
+                    error_log.log_error_with_details(
+                        crate::error_log::ErrorType::LLMProcessing,
+                        "AI processing unavailable, using dictation mode",
+                        local_err.clone(),
+                    );
+                }
+                ActionResult {
+                    action_type: ActionType::TypeText,
+                    payload: serde_json::json!({}),
+                    refined_text: Some(transcription.text.clone()),
+                    response_text: None,
+                    requires_confirmation: false,
                 }
             }
         }
@@ -1330,8 +875,6 @@ pub async fn stop_listening(
                 intent_text
             );
             local_action
-        } else if let Some(question_action) = question_action {
-            question_action
         } else if should_route_locally_first(&intent_text, &context) {
             if let Some(local_action) = cloud::detect_local_command(&intent_text) {
                 log::info!(
@@ -1348,7 +891,7 @@ pub async fn stop_listening(
     };
 
     // Deterministic local router fallback.
-    // If server returns dictation for an obvious command phrase, prefer local action routing.
+    // If generic dictation is returned for an obvious command phrase, prefer local action routing.
     if !dictation_only && should_use_local_command_fallback(&intent_text, &context, &action) {
         if let Some(local_action) = cloud::detect_local_command(&intent_text) {
             log::info!(
@@ -1839,17 +1382,6 @@ fn infer_web_target_from_phrase(target: &str, allow_single_word: bool) -> Option
     None
 }
 
-fn use_remote_api() -> bool {
-    if let Ok(value) = std::env::var("LISTENOS_USE_REMOTE_API") {
-        let normalized = value.trim().to_lowercase();
-        return matches!(normalized.as_str(), "1" | "true" | "yes" | "on");
-    }
-
-    LocalApiSettings::load_from_disk()
-        .map(|settings| settings.use_remote_api)
-        .unwrap_or(false)
-}
-
 fn confirmations_enabled() -> bool {
     std::env::var("LISTENOS_REQUIRE_CONFIRMATION")
         .map(|v| {
@@ -1891,134 +1423,6 @@ fn normalize_spoken_command_text(text: &str) -> String {
     t
 }
 
-fn should_handle_as_question(text: &str, context: &VoiceContext) -> bool {
-    if text.trim().is_empty() {
-        return false;
-    }
-
-    // Commands always win over Q&A.
-    if looks_like_command_phrase(text) {
-        return false;
-    }
-
-    let mut t = normalize_spoken_command_text(text);
-    t = t.replace("  ", " ");
-    let words = t.split_whitespace().count();
-
-    let explicit_question_prefix = t.starts_with("ask ")
-        || t.starts_with("question ")
-        || t.starts_with("answer this ")
-        || t.starts_with("tell me ")
-        || t.starts_with("explain ");
-
-    // Explicit prefixes always opt into Q&A mode, even in dictation mode.
-    if explicit_question_prefix {
-        return true;
-    }
-
-    let question_starters = [
-        "what",
-        "what's",
-        "who",
-        "when",
-        "where",
-        "why",
-        "how",
-        "is ",
-        "are ",
-        "do ",
-        "does ",
-        "did ",
-    ];
-
-    let looks_like_question = t.ends_with('?')
-        || question_starters.iter().any(|prefix| t.starts_with(prefix));
-
-    if !looks_like_question {
-        return false;
-    }
-
-    // In dictation mode, only explicit prefixes enter Q&A.
-    // This keeps normal dictation questions from being hijacked by the assistant.
-    match context.mode {
-        VoiceMode::Command => words <= 40,
-        VoiceMode::Dictation => false,
-    }
-}
-
-fn clean_question_text(text: &str) -> String {
-    let mut t = text.trim().to_string();
-    let lower = t.to_lowercase();
-    for prefix in ["ask ", "question ", "answer this "] {
-        if lower.starts_with(prefix) {
-            t = t[prefix.len()..].trim().to_string();
-            break;
-        }
-    }
-    trim_spoken_punctuation(&t)
-}
-
-async fn generate_groq_answer(question: &str, conv_context: &ConversationContext) -> Result<String, String> {
-    let api_key = cloud::get_groq_key();
-    if api_key.trim().is_empty() {
-        return Err("Missing GROQ_API_KEY".to_string());
-    }
-
-    let mut messages = vec![
-        serde_json::json!({
-            "role": "system",
-            "content": "You are ListenOS voice assistant. Reply naturally in 1-3 concise sentences unless the user asks for more detail."
-        })
-    ];
-
-    if !conv_context.history.trim().is_empty() {
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": format!("Conversation context:\n{}", conv_context.history)
-        }));
-    }
-
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": question
-    }));
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .bearer_auth(api_key)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": "llama-3.3-70b-versatile",
-            "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": 280
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Groq request failed: {}", e))?;
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(format!("Groq error [{}]: {}", status, body));
-    }
-
-    let parsed: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse Groq response: {}", e))?;
-
-    let answer = parsed["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    if answer.is_empty() {
-        return Err("Groq returned empty answer".to_string());
-    }
-
-    Ok(answer)
-}
 
 fn upsert_action_payload_field(action: &mut ActionResult, key: &str, value: serde_json::Value) {
     if let Some(obj) = action.payload.as_object_mut() {
@@ -2028,29 +1432,6 @@ fn upsert_action_payload_field(action: &mut ActionResult, key: &str, value: serd
         payload.insert(key.to_string(), value);
         action.payload = serde_json::Value::Object(payload);
     }
-}
-
-async fn build_question_response_action(
-    transcription: &str,
-    conv_context: &ConversationContext,
-) -> Result<ActionResult, String> {
-    let question = clean_question_text(transcription);
-    if question.is_empty() {
-        return Err("Question text is empty".to_string());
-    }
-
-    let answer = generate_groq_answer(&question, conv_context).await?;
-    let action = ActionResult {
-        action_type: ActionType::Respond,
-        payload: serde_json::json!({
-            "source": "ask_mode"
-        }),
-        refined_text: None,
-        response_text: Some(answer),
-        requires_confirmation: false,
-    };
-
-    Ok(action)
 }
 
 fn should_route_locally_first(text: &str, context: &VoiceContext) -> bool {
@@ -2064,9 +1445,9 @@ fn should_route_locally_first(text: &str, context: &VoiceContext) -> bool {
 fn should_use_local_command_fallback(
     text: &str,
     context: &VoiceContext,
-    server_action: &ActionResult,
+    resolved_action: &ActionResult,
 ) -> bool {
-    if server_action.action_type != ActionType::TypeText {
+    if resolved_action.action_type != ActionType::TypeText {
         return false;
     }
 
@@ -2913,7 +2294,7 @@ pub async fn type_text(text: String) -> Result<CommandResult, String> {
 }
 
 async fn type_text_internal(text: String) -> Result<CommandResult, String> {
-    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
+    use enigo::{Enigo, Keyboard, Settings};
     use arboard::Clipboard;
     
     if text.is_empty() {
@@ -2922,9 +2303,8 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
     
     log::info!("type_text_internal: Starting to type {} chars", text.len());
     
-    // Longer delay to ensure focus is restored after Ctrl+Space release
-    // Windows needs more time to restore focus to the previous window
-    tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
+    // Short delay for focus to settle after Ctrl+Space release
+    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
     
     // Use clipboard + Ctrl+V for reliable pasting (more reliable than enigo.text())
     let mut clipboard = Clipboard::new()
@@ -2940,7 +2320,7 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
         match clipboard.set_text(&text) {
             Ok(_) => {
                 // Verify the clipboard was actually set
-                tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
                 if let Ok(current) = clipboard.get_text() {
                     if current == text {
                         set_success = true;
@@ -2954,7 +2334,7 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
                 log::warn!("type_text_internal: Failed to set clipboard on attempt {}: {}", attempt, e);
             }
         }
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     }
     
     if !set_success {
@@ -2962,7 +2342,7 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
     }
     
     // Additional delay for clipboard to be fully ready
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     
     // Simulate Ctrl+V to paste with retry
     let mut paste_success = false;
@@ -2992,8 +2372,8 @@ async fn type_text_internal(text: String) -> Result<CommandResult, String> {
         }
     }
     
-    // Restore previous clipboard content after a delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    // Restore previous clipboard content after a brief delay
+    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
     if let Some(prev) = previous_content {
         let _ = clipboard.set_text(&prev);
         log::info!("type_text_internal: Restored previous clipboard content");
@@ -3473,8 +2853,8 @@ async fn execute_clipboard_action(action: &ActionResult, state: &State<'_, AppSt
         _ => return Err("Invalid clipboard action".to_string()),
     };
 
-    // Process with LLM
-    let client = GroqClient::new();
+    // Process with local clipboard transformer
+    let client = VoiceClient::new();
     let result = client.process_clipboard(&content, operation, &action.payload).await?;
 
     // Set the result back to clipboard
@@ -3936,9 +3316,9 @@ pub async fn set_vibe_coding_config(
     Ok(normalized)
 }
 
-fn sanitize_groq_api_key(raw: &str) -> String {
+fn sanitize_deepgram_api_key(raw: &str) -> String {
     let cleaned = raw.trim().to_string();
-    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("replace_with_groq_api_key") {
+    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("replace_with_deepgram_api_key") {
         String::new()
     } else {
         cleaned
@@ -3952,12 +3332,10 @@ pub async fn get_local_api_settings() -> Result<LocalApiSettings, String> {
 
 #[tauri::command]
 pub async fn set_local_api_settings(
-    use_remote_api: bool,
-    groq_api_key: String,
+    deepgram_api_key: String,
 ) -> Result<LocalApiSettings, String> {
     let settings = LocalApiSettings {
-        use_remote_api,
-        groq_api_key: sanitize_groq_api_key(&groq_api_key),
+        deepgram_api_key: sanitize_deepgram_api_key(&deepgram_api_key),
     };
     settings.save_to_disk()?;
     Ok(settings)

@@ -264,7 +264,6 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   const [vibeConfig, setVibeConfigState] = useState<VibeCodingConfig>(DEFAULT_VIBE_CONFIG);
   const [vibeSaving, setVibeSaving] = useState(false);
   const [vibeLoading, setVibeLoading] = useState(false);
-  const [useRemoteApi, setUseRemoteApi] = useState(false);
   const [deepgramApiKey, setDeepgramApiKey] = useState("");
   const [apiSettingsLoading, setApiSettingsLoading] = useState(false);
   const [apiSettingsSaving, setApiSettingsSaving] = useState(false);
@@ -299,7 +298,6 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       setApiSettingsLoading(true);
       getLocalApiSettings()
         .then((localApi) => {
-          setUseRemoteApi(localApi.use_remote_api);
           setDeepgramApiKey(localApi.deepgram_api_key ?? "");
         })
         .catch((err) => {
@@ -367,29 +365,6 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     await updateSettings({ showInTray: checked });
   }, [updateSettings]);
 
-  const handleApiRoutingChange = useCallback(async (checked: boolean) => {
-    setUseRemoteApi(checked);
-    if (!isTauri()) {
-      return;
-    }
-
-    setApiSettingsSaving(true);
-    try {
-      const saved = await setLocalApiSettings(checked, deepgramApiKey);
-      setUseRemoteApi(saved.use_remote_api);
-      setDeepgramApiKey(saved.deepgram_api_key ?? "");
-      setUpdateStatus(saved.use_remote_api
-        ? "Cloud routing enabled"
-        : "Local routing enabled");
-    } catch (err) {
-      console.error("Failed to update API routing:", err);
-      setUseRemoteApi(!checked);
-      setUpdateStatus("Failed to update API routing");
-    } finally {
-      setApiSettingsSaving(false);
-    }
-  }, [deepgramApiKey]);
-
   const handleDeepgramApiKeySave = useCallback(async () => {
     if (!isTauri()) {
       return;
@@ -397,8 +372,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
 
     setApiSettingsSaving(true);
     try {
-      const saved = await setLocalApiSettings(useRemoteApi, deepgramApiKey);
-      setUseRemoteApi(saved.use_remote_api);
+      const saved = await setLocalApiSettings(deepgramApiKey);
       setDeepgramApiKey(saved.deepgram_api_key ?? "");
       setUpdateStatus("Deepgram API key saved locally");
     } catch (err) {
@@ -407,7 +381,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     } finally {
       setApiSettingsSaving(false);
     }
-  }, [deepgramApiKey, useRemoteApi]);
+  }, [deepgramApiKey]);
 
   const handleSourceLanguageChange = useCallback(async (newLanguage: string) => {
     const previousSource = sourceLanguage;
@@ -660,23 +634,8 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               }
             />
             <SettingsRow
-              label="Use ListenOS cloud routing"
-              description={
-                useRemoteApi
-                  ? "Voice intent routes through ListenOS server API."
-                  : "Voice intent runs locally via direct Deepgram API."
-              }
-              action={
-                <ToggleSwitch
-                  checked={useRemoteApi}
-                  onChange={handleApiRoutingChange}
-                  disabled={apiSettingsLoading || apiSettingsSaving}
-                />
-              }
-            />
-            <SettingsRow
               label="Deepgram API key"
-              description={deepgramApiKey.trim().length > 0 ? "Your key is saved on this device." : "Required for fully local mode."}
+              description={deepgramApiKey.trim().length > 0 ? "Your key is saved on this device." : "Required for local voice processing."}
               action={
                 <div className="flex items-center gap-2">
                   <input

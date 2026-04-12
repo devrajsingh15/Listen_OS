@@ -70,7 +70,7 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
   const handleNavigation = (href: string) => {
     if (isTauri()) {
       // In Tauri, use window.location for reliable navigation
-      window.location.href = href;
+      window.location.assign(href);
     } else {
       router.push(href);
     }

@@ -191,7 +191,6 @@ export async function setVibeCodingConfig(
 }
 
 export interface LocalApiSettings {
-  use_remote_api: boolean;
   deepgram_api_key: string;
 }
 
@@ -200,13 +199,10 @@ export async function getLocalApiSettings(): Promise<LocalApiSettings> {
 }
 
 export async function setLocalApiSettings(
-  useRemoteApi: boolean,
   deepgramApiKey: string,
 ): Promise<LocalApiSettings> {
   return invoke("set_local_api_settings", {
-    useRemoteApi,
     deepgramApiKey,
-    use_remote_api: useRemoteApi,
     deepgram_api_key: deepgramApiKey,
   });
 }

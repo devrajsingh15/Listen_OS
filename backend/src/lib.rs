@@ -17,10 +17,8 @@ mod integrations;
 mod notes;
 mod snippets;
 mod dictionary;
-mod rate_limit;
 mod correction;
 mod error_log;
-mod api_client;
 
 use tauri::{
     Emitter, Manager, AppHandle, PhysicalPosition, Position,
@@ -34,7 +32,7 @@ use tokio::sync::Mutex;
 pub use audio::AudioState;
 pub use commands::*;
 pub use config::AppConfig;
-pub use cloud::{CloudConfig, VoiceContext, VoiceMode};
+pub use cloud::{VoiceContext, VoiceMode};
 pub use streaming::{AudioStreamer, AudioAccumulator, SAMPLE_RATE};
 pub use conversation::{ConversationMemory, ConversationStore, Message, Role, Fact};
 pub use clipboard::ClipboardService;
@@ -44,7 +42,6 @@ pub use snippets::{Snippet, SnippetsStore};
 pub use dictionary::{DictionaryWord, DictionaryStore};
 pub use correction::CorrectionTracker;
 pub use error_log::{ErrorLog, ErrorEntry, ErrorType};
-pub use api_client::{ApiClient, ApiConfig};
 
 fn center_assistant_horizontally(app: &tauri::AppHandle) {
     if let Some(assistant) = app.get_webview_window("assistant") {
@@ -75,7 +72,6 @@ fn center_assistant_horizontally(app: &tauri::AppHandle) {
 pub struct AppState {
     pub audio: Arc<Mutex<AudioState>>,
     pub config: Arc<Mutex<AppConfig>>,
-    pub cloud_config: Arc<Mutex<CloudConfig>>,
     pub streamer: Arc<Mutex<AudioStreamer>>,
     pub accumulator: Arc<Mutex<AudioAccumulator>>,
     pub is_listening: Arc<Mutex<bool>>,
@@ -93,8 +89,6 @@ pub struct AppState {
     pub correction_tracker: Arc<Mutex<CorrectionTracker>>,
     // Error logging
     pub error_log: Arc<Mutex<ErrorLog>>,
-    // API client for backend server
-    pub api_client: Arc<Mutex<ApiClient>>,
     // Pending high-risk action awaiting explicit user confirmation
     pub pending_action: Arc<Mutex<Option<commands::PendingAction>>>,
 }
@@ -112,20 +106,6 @@ impl Default for AppState {
             }
         }
 
-        // Initialize API client with config from environment
-        let api_base_url = std::env::var("LISTENOS_API_URL")
-            .unwrap_or_else(|_| "https://server-bay-omega-45.vercel.app".to_string());
-        let api_key = std::env::var("LISTENOS_API_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        
-        let api_config = ApiConfig {
-            base_url: api_base_url,
-            api_key,
-            session_token: None,
-        };
-
         let mut app_config = AppConfig::default();
         if let Some(saved_languages) = crate::config::LanguagePreferences::load_from_disk() {
             app_config.language_preferences = saved_languages;
@@ -137,7 +117,6 @@ impl Default for AppState {
         Self {
             audio: Arc::new(Mutex::new(AudioState::default())),
             config: Arc::new(Mutex::new(app_config)),
-            cloud_config: Arc::new(Mutex::new(CloudConfig::default())),
             streamer: Arc::new(Mutex::new(AudioStreamer::new())),
             accumulator: Arc::new(Mutex::new(AudioAccumulator::new(SAMPLE_RATE))),
             is_listening: Arc::new(Mutex::new(false)),
@@ -150,7 +129,6 @@ impl Default for AppState {
             integrations: Arc::new(Mutex::new(IntegrationManager::new())),
             correction_tracker: Arc::new(Mutex::new(CorrectionTracker::new())),
             error_log: Arc::new(Mutex::new(ErrorLog::new())),
-            api_client: Arc::new(Mutex::new(ApiClient::with_config(api_config))),
             pending_action: Arc::new(Mutex::new(None)),
         }
     }
@@ -169,8 +147,8 @@ pub fn run() {
     log::info!("Starting ListenOS - AI Voice Control System");
     
     // Debug: Check if API keys are loaded
-    let groq_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
-    log::info!("GROQ_API_KEY loaded: {} chars", groq_key.len());
+    let deepgram_key = std::env::var("DEEPGRAM_API_KEY").unwrap_or_default();
+    log::info!("DEEPGRAM_API_KEY loaded: {} chars", deepgram_key.len());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -561,7 +539,7 @@ async fn toggle_note_pin(id: String) -> Result<bool, String> {
 /// Create a note from voice - simplified flow that just transcribes and saves
 #[tauri::command]
 async fn create_voice_note(state: tauri::State<'_, AppState>) -> Result<notes::Note, String> {
-    use cloud::GroqClient;
+    use cloud::VoiceClient;
     
     // Get accumulated audio
     let (samples, sample_rate) = {
@@ -576,8 +554,8 @@ async fn create_voice_note(state: tauri::State<'_, AppState>) -> Result<notes::N
     // Encode to WAV
     let wav_data = cloud::encode_wav(&samples, sample_rate)?;
 
-    // Transcribe with Groq (no intent processing)
-    let client = GroqClient::new();
+    // Transcribe with Deepgram (no intent processing)
+    let client = VoiceClient::new();
     let result = client.transcribe(&wav_data).await?;
     
     let text = result.text.trim();

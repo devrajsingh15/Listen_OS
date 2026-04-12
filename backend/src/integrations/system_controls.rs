@@ -4,7 +4,7 @@
 //! bluetooth, wifi, and notifications.
 //! Now supports both Windows and macOS.
 
-use super::{AppIntegration, IntegrationAction, IntegrationResult, ActionParameter};
+use super::{ActionParameter, AppIntegration, IntegrationAction, IntegrationResult};
 use chrono::Local;
 use std::collections::HashMap;
 use std::fs;
@@ -16,20 +16,6 @@ pub struct SystemControlsIntegration;
 impl SystemControlsIntegration {
     pub fn new() -> Self {
         Self
-    }
-
-    /// Execute a shell command based on platform
-    fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
-        let output = Command::new(cmd)
-            .args(args)
-            .output()
-            .map_err(|e| format!("Command error: {}", e))?;
-
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).to_string())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).to_string())
-        }
     }
 
     /// Execute a PowerShell command (Windows only)
@@ -65,7 +51,7 @@ impl SystemControlsIntegration {
     /// Set display brightness (0-100)
     fn set_brightness(level: u32) -> Result<(), String> {
         let level = level.min(100);
-        
+
         #[cfg(windows)]
         {
             let script = format!(
@@ -82,7 +68,7 @@ impl SystemControlsIntegration {
             );
             Self::run_powershell(&script)?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             // Use brightness command or AppleScript
@@ -100,7 +86,7 @@ impl SystemControlsIntegration {
                         .output()
                 });
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             // Linux: try xrandr or brightnessctl
@@ -108,7 +94,7 @@ impl SystemControlsIntegration {
                 .args(["set", &format!("{}%", level)])
                 .output();
         }
-        
+
         Ok(())
     }
 
@@ -125,9 +111,12 @@ impl SystemControlsIntegration {
                 }
             "#;
             let output = Self::run_powershell(script)?;
-            output.trim().parse().map_err(|_| "Failed to parse brightness".to_string())
+            output
+                .trim()
+                .parse()
+                .map_err(|_| "Failed to parse brightness".to_string())
         }
-        
+
         #[cfg(not(windows))]
         {
             // Return default for non-Windows
@@ -144,7 +133,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to open night light settings: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             // macOS: Toggle Night Shift via AppleScript
@@ -156,13 +145,13 @@ impl SystemControlsIntegration {
             "#;
             let _ = Self::run_applescript(script);
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             // Linux: try redshift
             let _ = Command::new("redshift").args(["-O", "4500"]).spawn();
         }
-        
+
         Ok(())
     }
 
@@ -175,7 +164,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to lock screen: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             // macOS: Use pmset or CGSession
@@ -190,14 +179,16 @@ impl SystemControlsIntegration {
                 })
                 .map_err(|e| format!("Failed to lock screen: {}", e))?;
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             // Linux
-            let _ = Command::new("loginctl").args(["lock-session"]).spawn()
+            let _ = Command::new("loginctl")
+                .args(["lock-session"])
+                .spawn()
                 .or_else(|_| Command::new("xdg-screensaver").args(["lock"]).spawn());
         }
-        
+
         Ok(())
     }
 
@@ -207,7 +198,7 @@ impl SystemControlsIntegration {
         {
             Self::run_powershell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)")?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             Command::new("pmset")
@@ -215,12 +206,12 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to sleep: {}", e))?;
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = Command::new("systemctl").args(["suspend"]).spawn();
         }
-        
+
         Ok(())
     }
 
@@ -234,7 +225,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to initiate shutdown: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             if delay_seconds == 0 {
@@ -249,14 +240,14 @@ impl SystemControlsIntegration {
                     .map_err(|e| format!("Failed to schedule shutdown: {}", e))?;
             }
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = Command::new("shutdown")
                 .args(["-h", &format!("+{}", delay_seconds / 60)])
                 .spawn();
         }
-        
+
         Ok(())
     }
 
@@ -270,7 +261,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to initiate restart: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             if delay_seconds == 0 {
@@ -285,14 +276,14 @@ impl SystemControlsIntegration {
                     .map_err(|e| format!("Failed to schedule restart: {}", e))?;
             }
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = Command::new("shutdown")
                 .args(["-r", &format!("+{}", delay_seconds / 60)])
                 .spawn();
         }
-        
+
         Ok(())
     }
 
@@ -305,7 +296,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to cancel shutdown: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             Command::new("sudo")
@@ -313,12 +304,12 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to cancel shutdown: {}", e))?;
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = Command::new("shutdown").args(["-c"]).spawn();
         }
-        
+
         Ok(())
     }
 
@@ -331,7 +322,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to open Focus Assist settings: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             // macOS Monterey+: Toggle Focus mode
@@ -351,12 +342,12 @@ impl SystemControlsIntegration {
                     .map_err(|e| e.to_string())
             });
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             log::info!("DND not supported on this platform");
         }
-        
+
         Ok(())
     }
 
@@ -369,7 +360,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to open Bluetooth settings: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             Command::new("open")
@@ -382,13 +373,16 @@ impl SystemControlsIntegration {
                 })
                 .map_err(|e| format!("Failed to open Bluetooth settings: {}", e))?;
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            let _ = Command::new("blueman-manager").spawn()
-                .or_else(|_| Command::new("gnome-control-center").args(["bluetooth"]).spawn());
+            let _ = Command::new("blueman-manager").spawn().or_else(|_| {
+                Command::new("gnome-control-center")
+                    .args(["bluetooth"])
+                    .spawn()
+            });
         }
-        
+
         Ok(())
     }
 
@@ -401,7 +395,7 @@ impl SystemControlsIntegration {
                 .spawn()
                 .map_err(|e| format!("Failed to open WiFi settings: {}", e))?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             Command::new("open")
@@ -414,13 +408,15 @@ impl SystemControlsIntegration {
                 })
                 .map_err(|e| format!("Failed to open WiFi settings: {}", e))?;
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            let _ = Command::new("gnome-control-center").args(["wifi"]).spawn()
+            let _ = Command::new("gnome-control-center")
+                .args(["wifi"])
+                .spawn()
                 .or_else(|_| Command::new("nm-connection-editor").spawn());
         }
-        
+
         Ok(())
     }
 
@@ -429,7 +425,8 @@ impl SystemControlsIntegration {
         #[cfg(windows)]
         {
             let script = match enable {
-                Some(true) => r#"
+                Some(true) => {
+                    r#"
                     $adapter = Get-NetAdapter | Where-Object { $_.Name -like '*Wi-Fi*' -or $_.Name -like '*Wireless*' } | Select-Object -First 1
                     if ($adapter) {
                         Enable-NetAdapter -Name $adapter.Name -Confirm:$false
@@ -437,8 +434,10 @@ impl SystemControlsIntegration {
                     } else {
                         Write-Error "No WiFi adapter found"
                     }
-                "#,
-                Some(false) => r#"
+                "#
+                }
+                Some(false) => {
+                    r#"
                     $adapter = Get-NetAdapter | Where-Object { $_.Name -like '*Wi-Fi*' -or $_.Name -like '*Wireless*' } | Select-Object -First 1
                     if ($adapter) {
                         Disable-NetAdapter -Name $adapter.Name -Confirm:$false
@@ -446,8 +445,10 @@ impl SystemControlsIntegration {
                     } else {
                         Write-Error "No WiFi adapter found"
                     }
-                "#,
-                None => r#"
+                "#
+                }
+                None => {
+                    r#"
                     $adapter = Get-NetAdapter | Where-Object { $_.Name -like '*Wi-Fi*' -or $_.Name -like '*Wireless*' } | Select-Object -First 1
                     if ($adapter) {
                         if ($adapter.Status -eq 'Up') {
@@ -460,12 +461,13 @@ impl SystemControlsIntegration {
                     } else {
                         Write-Error "No WiFi adapter found"
                     }
-                "#,
+                "#
+                }
             };
             let output = Self::run_powershell(script)?;
             return Ok(output.trim().to_string());
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             let action = match enable {
@@ -478,18 +480,29 @@ impl SystemControlsIntegration {
                         .output()
                         .map_err(|e| e.to_string())?;
                     let status = String::from_utf8_lossy(&output.stdout);
-                    if status.contains("On") { "off" } else { "on" }
+                    if status.contains("On") {
+                        "off"
+                    } else {
+                        "on"
+                    }
                 }
             };
-            
+
             Command::new("networksetup")
                 .args(["-setairportpower", "en0", action])
                 .output()
                 .map_err(|e| format!("Failed to toggle WiFi: {}", e))?;
-            
-            return Ok(format!("WiFi {}", if action == "on" { "enabled" } else { "disabled" }));
+
+            return Ok(format!(
+                "WiFi {}",
+                if action == "on" {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ));
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let action = match enable {
@@ -497,7 +510,9 @@ impl SystemControlsIntegration {
                 Some(false) => "down",
                 None => "up", // Default to enable
             };
-            let _ = Command::new("nmcli").args(["radio", "wifi", action]).output();
+            let _ = Command::new("nmcli")
+                .args(["radio", "wifi", action])
+                .output();
             return Ok(format!("WiFi toggled"));
         }
     }
@@ -507,7 +522,8 @@ impl SystemControlsIntegration {
         #[cfg(windows)]
         {
             let script = match enable {
-                Some(true) => r#"
+                Some(true) => {
+                    r#"
                     Add-Type -AssemblyName System.Runtime.WindowsRuntime
                     $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
                     Function Await($WinRtTask, $ResultType) {
@@ -524,8 +540,10 @@ impl SystemControlsIntegration {
                         Await ($bluetooth.SetStateAsync('On')) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null
                         Write-Output "Bluetooth enabled"
                     }
-                "#,
-                Some(false) => r#"
+                "#
+                }
+                Some(false) => {
+                    r#"
                     Add-Type -AssemblyName System.Runtime.WindowsRuntime
                     $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
                     Function Await($WinRtTask, $ResultType) {
@@ -542,8 +560,10 @@ impl SystemControlsIntegration {
                         Await ($bluetooth.SetStateAsync('Off')) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null
                         Write-Output "Bluetooth disabled"
                     }
-                "#,
-                None => r#"
+                "#
+                }
+                None => {
+                    r#"
                     Add-Type -AssemblyName System.Runtime.WindowsRuntime
                     $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
                     Function Await($WinRtTask, $ResultType) {
@@ -565,12 +585,13 @@ impl SystemControlsIntegration {
                             Write-Output "Bluetooth enabled"
                         }
                     }
-                "#,
+                "#
+                }
             };
             let output = Self::run_powershell(script)?;
             return Ok(output.trim().to_string());
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             // macOS: Use blueutil if available, otherwise open System Preferences
@@ -579,23 +600,22 @@ impl SystemControlsIntegration {
                 Some(false) => "0",
                 None => {
                     // Toggle: check current state
-                    let output = Command::new("blueutil")
-                        .args(["--power"])
-                        .output();
+                    let output = Command::new("blueutil").args(["--power"]).output();
                     match output {
                         Ok(o) if String::from_utf8_lossy(&o.stdout).trim() == "1" => "0",
                         _ => "1",
                     }
                 }
             };
-            
-            let result = Command::new("blueutil")
-                .args(["--power", action])
-                .output();
-            
+
+            let result = Command::new("blueutil").args(["--power", action]).output();
+
             match result {
                 Ok(_) => {
-                    return Ok(format!("Bluetooth {}", if action == "1" { "enabled" } else { "disabled" }));
+                    return Ok(format!(
+                        "Bluetooth {}",
+                        if action == "1" { "enabled" } else { "disabled" }
+                    ));
                 }
                 Err(_) => {
                     // Fallback: open Bluetooth preferences
@@ -604,7 +624,7 @@ impl SystemControlsIntegration {
                 }
             }
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let action = match enable {
@@ -612,7 +632,9 @@ impl SystemControlsIntegration {
                 Some(false) => "off",
                 None => "on",
             };
-            let _ = Command::new("bluetoothctl").args(["power", action]).output();
+            let _ = Command::new("bluetoothctl")
+                .args(["power", action])
+                .output();
             return Ok(format!("Bluetooth toggled"));
         }
     }
@@ -624,7 +646,7 @@ impl SystemControlsIntegration {
             let script = "Clear-RecycleBin -Force -ErrorAction SilentlyContinue";
             Self::run_powershell(script)?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             let script = r#"
@@ -634,12 +656,14 @@ impl SystemControlsIntegration {
             "#;
             Self::run_applescript(script)?;
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            let _ = Command::new("rm").args(["-rf", "~/.local/share/Trash/*"]).output();
+            let _ = Command::new("rm")
+                .args(["-rf", "~/.local/share/Trash/*"])
+                .output();
         }
-        
+
         Ok(())
     }
 
@@ -651,7 +675,8 @@ impl SystemControlsIntegration {
                 .map(PathBuf::from)
                 .map_err(|_| "Unable to resolve USERPROFILE".to_string())?;
             let dir = base.join("Pictures").join("Screenshots");
-            fs::create_dir_all(&dir).map_err(|e| format!("Failed to create screenshots directory: {}", e))?;
+            fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create screenshots directory: {}", e))?;
             return Ok(dir);
         }
 
@@ -661,7 +686,8 @@ impl SystemControlsIntegration {
                 .map(PathBuf::from)
                 .map_err(|_| "Unable to resolve HOME".to_string())?;
             let dir = base.join("Pictures").join("Screenshots");
-            fs::create_dir_all(&dir).map_err(|e| format!("Failed to create screenshots directory: {}", e))?;
+            fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create screenshots directory: {}", e))?;
             Ok(dir)
         }
     }
@@ -727,7 +753,10 @@ impl SystemControlsIntegration {
         };
 
         if !downloads.exists() {
-            return Err(format!("Downloads directory not found: {}", downloads.display()));
+            return Err(format!(
+                "Downloads directory not found: {}",
+                downloads.display()
+            ));
         }
         if !downloads.is_dir() {
             return Err(format!("Not a directory: {}", downloads.display()));
@@ -736,9 +765,13 @@ impl SystemControlsIntegration {
         let mut top_level_files = 0u64;
         let mut top_level_folders = 0u64;
 
-        for entry in fs::read_dir(&downloads).map_err(|e| format!("Failed to read downloads: {}", e))? {
+        for entry in
+            fs::read_dir(&downloads).map_err(|e| format!("Failed to read downloads: {}", e))?
+        {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let file_type = entry.file_type().map_err(|e| format!("Failed to inspect entry: {}", e))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| format!("Failed to inspect entry: {}", e))?;
             if file_type.is_file() {
                 top_level_files += 1;
             } else if file_type.is_dir() {
@@ -752,9 +785,13 @@ impl SystemControlsIntegration {
         let mut stack = vec![downloads.clone()];
 
         while let Some(dir) = stack.pop() {
-            for entry in fs::read_dir(&dir).map_err(|e| format!("Failed to traverse {}: {}", dir.display(), e))? {
+            for entry in fs::read_dir(&dir)
+                .map_err(|e| format!("Failed to traverse {}: {}", dir.display(), e))?
+            {
                 let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-                let file_type = entry.file_type().map_err(|e| format!("Failed to inspect entry: {}", e))?;
+                let file_type = entry
+                    .file_type()
+                    .map_err(|e| format!("Failed to inspect entry: {}", e))?;
                 if file_type.is_file() {
                     files_recursive += 1;
                 } else if file_type.is_dir() {
@@ -806,7 +843,8 @@ impl SystemControlsIntegration {
             Ok(_) => Ok(()),
             Err(_) => {
                 fs::copy(source, destination).map_err(|e| format!("Failed to copy file: {}", e))?;
-                fs::remove_file(source).map_err(|e| format!("Failed to remove source file: {}", e))?;
+                fs::remove_file(source)
+                    .map_err(|e| format!("Failed to remove source file: {}", e))?;
                 Ok(())
             }
         }
@@ -824,8 +862,10 @@ impl SystemControlsIntegration {
             "mp4" | "mkv" | "mov" | "avi" | "webm" | "m4v" => "Videos",
             "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" => "Audio",
             "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" => "Archives",
-            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "Documents",
-            "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "java" | "c" | "cpp" | "cs" | "go" | "php" | "rb" | "sh" | "ps1" | "json" | "yaml" | "yml" | "toml" => "Code",
+            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv"
+            | "md" => "Documents",
+            "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "java" | "c" | "cpp" | "cs" | "go"
+            | "php" | "rb" | "sh" | "ps1" | "json" | "yaml" | "yml" | "toml" => "Code",
             "exe" | "msi" | "dmg" | "pkg" | "deb" | "rpm" | "appimage" => "Installers",
             _ => "Others",
         }
@@ -838,7 +878,10 @@ impl SystemControlsIntegration {
         };
 
         if !downloads.exists() {
-            return Err(format!("Downloads directory not found: {}", downloads.display()));
+            return Err(format!(
+                "Downloads directory not found: {}",
+                downloads.display()
+            ));
         }
         if !downloads.is_dir() {
             return Err(format!("Not a directory: {}", downloads.display()));
@@ -848,9 +891,13 @@ impl SystemControlsIntegration {
         let mut moved_examples: Vec<String> = Vec::new();
         let mut by_folder: HashMap<String, usize> = HashMap::new();
 
-        for entry in fs::read_dir(&downloads).map_err(|e| format!("Failed to read downloads: {}", e))? {
+        for entry in
+            fs::read_dir(&downloads).map_err(|e| format!("Failed to read downloads: {}", e))?
+        {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let file_type = entry.file_type().map_err(|e| format!("Failed to read file type: {}", e))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| format!("Failed to read file type: {}", e))?;
             if !file_type.is_file() {
                 continue;
             }
@@ -858,7 +905,8 @@ impl SystemControlsIntegration {
             let source = entry.path();
             let category = Self::categorize_file(&source).to_string();
             let target_dir = downloads.join(&category);
-            fs::create_dir_all(&target_dir).map_err(|e| format!("Failed to create category folder: {}", e))?;
+            fs::create_dir_all(&target_dir)
+                .map_err(|e| format!("Failed to create category folder: {}", e))?;
 
             let file_name = source
                 .file_name()
@@ -921,7 +969,7 @@ impl SystemControlsIntegration {
             );
             Self::run_powershell(&script)?;
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             let output = Command::new("screencapture")
@@ -933,7 +981,7 @@ impl SystemControlsIntegration {
                 return Err(format!("Screenshot command failed: {}", stderr));
             }
         }
-        
+
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             let output = Command::new("sh")
@@ -1002,14 +1050,12 @@ impl AppIntegration for SystemControlsIntegration {
                 id: "system_brightness".to_string(),
                 name: "Set Brightness".to_string(),
                 description: "Adjust display brightness".to_string(),
-                parameters: vec![
-                    ActionParameter {
-                        name: "level".to_string(),
-                        param_type: "number".to_string(),
-                        required: false,
-                        description: "Brightness level (0-100) or 'up'/'down'".to_string(),
-                    },
-                ],
+                parameters: vec![ActionParameter {
+                    name: "level".to_string(),
+                    param_type: "number".to_string(),
+                    required: false,
+                    description: "Brightness level (0-100) or 'up'/'down'".to_string(),
+                }],
                 example_phrases: vec![
                     "set brightness to 50".to_string(),
                     "brightness up".to_string(),
@@ -1051,14 +1097,12 @@ impl AppIntegration for SystemControlsIntegration {
                 id: "system_shutdown".to_string(),
                 name: "Shutdown".to_string(),
                 description: "Shutdown the computer".to_string(),
-                parameters: vec![
-                    ActionParameter {
-                        name: "delay".to_string(),
-                        param_type: "number".to_string(),
-                        required: false,
-                        description: "Delay in seconds before shutdown".to_string(),
-                    },
-                ],
+                parameters: vec![ActionParameter {
+                    name: "delay".to_string(),
+                    param_type: "number".to_string(),
+                    required: false,
+                    description: "Delay in seconds before shutdown".to_string(),
+                }],
                 example_phrases: vec![
                     "shutdown the computer".to_string(),
                     "shutdown in 5 minutes".to_string(),
@@ -1069,20 +1113,14 @@ impl AppIntegration for SystemControlsIntegration {
                 name: "Restart".to_string(),
                 description: "Restart the computer".to_string(),
                 parameters: vec![],
-                example_phrases: vec![
-                    "restart the computer".to_string(),
-                    "reboot".to_string(),
-                ],
+                example_phrases: vec!["restart the computer".to_string(), "reboot".to_string()],
             },
             IntegrationAction {
                 id: "system_cancel_shutdown".to_string(),
                 name: "Cancel Shutdown".to_string(),
                 description: "Cancel a pending shutdown".to_string(),
                 parameters: vec![],
-                example_phrases: vec![
-                    "cancel shutdown".to_string(),
-                    "abort shutdown".to_string(),
-                ],
+                example_phrases: vec!["cancel shutdown".to_string(), "abort shutdown".to_string()],
             },
             IntegrationAction {
                 id: "system_dnd".to_string(),
@@ -1108,14 +1146,12 @@ impl AppIntegration for SystemControlsIntegration {
                 id: "system_bluetooth_toggle".to_string(),
                 name: "Toggle Bluetooth".to_string(),
                 description: "Enable or disable Bluetooth".to_string(),
-                parameters: vec![
-                    ActionParameter {
-                        name: "enable".to_string(),
-                        param_type: "boolean".to_string(),
-                        required: false,
-                        description: "true to enable, false to disable".to_string(),
-                    },
-                ],
+                parameters: vec![ActionParameter {
+                    name: "enable".to_string(),
+                    param_type: "boolean".to_string(),
+                    required: false,
+                    description: "true to enable, false to disable".to_string(),
+                }],
                 example_phrases: vec![
                     "turn on bluetooth".to_string(),
                     "turn off bluetooth".to_string(),
@@ -1136,23 +1172,18 @@ impl AppIntegration for SystemControlsIntegration {
                 name: "Toggle WiFi".to_string(),
                 description: "Enable or disable WiFi".to_string(),
                 parameters: vec![],
-                example_phrases: vec![
-                    "turn off wifi".to_string(),
-                    "disable wifi".to_string(),
-                ],
+                example_phrases: vec!["turn off wifi".to_string(), "disable wifi".to_string()],
             },
             IntegrationAction {
                 id: "system_screenshot".to_string(),
                 name: "Screenshot".to_string(),
                 description: "Take a screenshot and save it to disk".to_string(),
-                parameters: vec![
-                    ActionParameter {
-                        name: "path".to_string(),
-                        param_type: "string".to_string(),
-                        required: false,
-                        description: "Optional output file path".to_string(),
-                    },
-                ],
+                parameters: vec![ActionParameter {
+                    name: "path".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Optional output file path".to_string(),
+                }],
                 example_phrases: vec![
                     "take a screenshot".to_string(),
                     "capture screen".to_string(),
@@ -1172,14 +1203,12 @@ impl AppIntegration for SystemControlsIntegration {
                 id: "system_downloads_count".to_string(),
                 name: "Count Downloads".to_string(),
                 description: "Count files and folders in Downloads".to_string(),
-                parameters: vec![
-                    ActionParameter {
-                        name: "path".to_string(),
-                        param_type: "string".to_string(),
-                        required: false,
-                        description: "Optional target directory (defaults to Downloads)".to_string(),
-                    },
-                ],
+                parameters: vec![ActionParameter {
+                    name: "path".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Optional target directory (defaults to Downloads)".to_string(),
+                }],
                 example_phrases: vec![
                     "how many files are in my downloads".to_string(),
                     "count items in downloads".to_string(),
@@ -1189,14 +1218,12 @@ impl AppIntegration for SystemControlsIntegration {
                 id: "system_organize_downloads".to_string(),
                 name: "Organize Downloads".to_string(),
                 description: "Organize files in Downloads into folders by file type".to_string(),
-                parameters: vec![
-                    ActionParameter {
-                        name: "path".to_string(),
-                        param_type: "string".to_string(),
-                        required: false,
-                        description: "Optional target directory (defaults to Downloads)".to_string(),
-                    },
-                ],
+                parameters: vec![ActionParameter {
+                    name: "path".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    description: "Optional target directory (defaults to Downloads)".to_string(),
+                }],
                 example_phrases: vec![
                     "organize my downloads folder".to_string(),
                     "sort downloads by file type".to_string(),
@@ -1207,23 +1234,27 @@ impl AppIntegration for SystemControlsIntegration {
                 name: "Empty Recycle Bin".to_string(),
                 description: "Empty the recycle bin / trash".to_string(),
                 parameters: vec![],
-                example_phrases: vec![
-                    "empty recycle bin".to_string(),
-                    "clear trash".to_string(),
-                ],
+                example_phrases: vec!["empty recycle bin".to_string(), "clear trash".to_string()],
             },
         ]
     }
 
-    fn execute(&self, action: &str, params: &serde_json::Value) -> Result<IntegrationResult, String> {
+    fn execute(
+        &self,
+        action: &str,
+        params: &serde_json::Value,
+    ) -> Result<IntegrationResult, String> {
         match action {
             "system_brightness" => {
                 let level = params.get("level");
-                
+
                 if let Some(level_val) = level {
                     if let Some(n) = level_val.as_u64() {
                         Self::set_brightness(n as u32)?;
-                        return Ok(IntegrationResult::success(format!("Brightness set to {}%", n)));
+                        return Ok(IntegrationResult::success(format!(
+                            "Brightness set to {}%",
+                            n
+                        )));
                     }
                     if let Some(s) = level_val.as_str() {
                         let current = Self::get_brightness().unwrap_or(50);
@@ -1233,80 +1264,85 @@ impl AppIntegration for SystemControlsIntegration {
                             _ => current,
                         };
                         Self::set_brightness(new_level)?;
-                        return Ok(IntegrationResult::success(format!("Brightness set to {}%", new_level)));
+                        return Ok(IntegrationResult::success(format!(
+                            "Brightness set to {}%",
+                            new_level
+                        )));
                     }
                 }
-                
+
                 let current = Self::get_brightness().unwrap_or(50);
                 Ok(IntegrationResult::success_with_data(
                     format!("Current brightness: {}%", current),
-                    serde_json::json!({ "brightness": current })
+                    serde_json::json!({ "brightness": current }),
                 ))
             }
-            
+
             "system_night_light" => {
                 Self::toggle_night_light()?;
                 Ok(IntegrationResult::success("Opened Night Light settings"))
             }
-            
+
             "system_lock" => {
                 Self::lock_screen()?;
                 Ok(IntegrationResult::success("Screen locked"))
             }
-            
+
             "system_sleep" => {
                 Self::sleep()?;
                 Ok(IntegrationResult::success("Computer going to sleep"))
             }
-            
+
             "system_shutdown" => {
-                let delay = params.get("delay")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(60) as u32;
+                let delay = params.get("delay").and_then(|v| v.as_u64()).unwrap_or(60) as u32;
                 Self::shutdown(delay)?;
-                Ok(IntegrationResult::success(format!("Shutting down in {} seconds", delay)))
+                Ok(IntegrationResult::success(format!(
+                    "Shutting down in {} seconds",
+                    delay
+                )))
             }
-            
+
             "system_restart" => {
-                let delay = params.get("delay")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(30) as u32;
+                let delay = params.get("delay").and_then(|v| v.as_u64()).unwrap_or(30) as u32;
                 Self::restart(delay)?;
-                Ok(IntegrationResult::success(format!("Restarting in {} seconds", delay)))
+                Ok(IntegrationResult::success(format!(
+                    "Restarting in {} seconds",
+                    delay
+                )))
             }
-            
+
             "system_cancel_shutdown" => {
                 Self::cancel_shutdown()?;
                 Ok(IntegrationResult::success("Shutdown cancelled"))
             }
-            
+
             "system_dnd" => {
                 Self::toggle_dnd()?;
                 Ok(IntegrationResult::success("Toggled Do Not Disturb"))
             }
-            
+
             "system_bluetooth" => {
                 Self::open_bluetooth_settings()?;
                 Ok(IntegrationResult::success("Opened Bluetooth settings"))
             }
-            
+
             "system_bluetooth_toggle" => {
                 let enable = params.get("enable").and_then(|v| v.as_bool());
                 let result = Self::toggle_bluetooth(enable)?;
                 Ok(IntegrationResult::success(result))
             }
-            
+
             "system_wifi" => {
                 Self::open_wifi_settings()?;
                 Ok(IntegrationResult::success("Opened WiFi settings"))
             }
-            
+
             "system_wifi_toggle" => {
                 let enable = params.get("enable").and_then(|v| v.as_bool());
                 let result = Self::toggle_wifi(enable)?;
                 Ok(IntegrationResult::success(result))
             }
-            
+
             "system_screenshot" => {
                 let path = params.get("path").and_then(|v| v.as_str());
                 let saved_path = Self::take_screenshot(path)?;
@@ -1373,12 +1409,12 @@ impl AppIntegration for SystemControlsIntegration {
                     ))
                 }
             }
-            
+
             "system_recycle_bin" => {
                 Self::empty_recycle_bin()?;
                 Ok(IntegrationResult::success("Recycle bin / trash emptied"))
             }
-            
+
             _ => Err(format!("Unknown system action: {}", action)),
         }
     }

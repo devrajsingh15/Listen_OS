@@ -1,51 +1,24 @@
 //! Cloud API providers for Listen OS
-//! 
-//! Supports two modes:
-//! 1. Remote mode (default): Uses backend API server for AI processing
-//! 2. Local mode (fallback): Direct API calls with environment keys
 
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
 
-// ============ API MODE ============
-
-/// API mode - remote (server) or local (direct)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ApiMode {
-    /// Use backend API server (recommended)
-    Remote,
-    /// Direct API calls (fallback, requires local API keys)
-    Local,
-}
-
-impl Default for ApiMode {
-    fn default() -> Self {
-        // Default to remote mode
-        ApiMode::Remote
-    }
-}
-
 // ============ API KEY HELPERS ============
 // For local/fallback mode only - reads from environment
 
-/// Get the Groq API key from environment
-pub fn get_groq_key() -> String {
-    if let Ok(value) = std::env::var("GROQ_API_KEY") {
+/// Get the Deepgram API key from environment
+pub fn get_deepgram_key() -> String {
+    if let Ok(value) = std::env::var("DEEPGRAM_API_KEY") {
         let cleaned = value.trim();
-        if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case("replace_with_groq_api_key") {
+        if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case("replace_with_deepgram_api_key") {
             return cleaned.to_string();
         }
     }
 
     crate::config::LocalApiSettings::load_from_disk()
-        .map(|settings| settings.groq_api_key.trim().to_string())
+        .map(|settings| settings.deepgram_api_key.trim().to_string())
         .filter(|key| !key.is_empty())
         .unwrap_or_default()
-}
-
-/// Get the Deepgram API key from environment
-pub fn get_deepgram_key() -> String {
-    std::env::var("DEEPGRAM_API_KEY").unwrap_or_default()
 }
 
 /// Extract a number from text (for brightness level, volume, etc.)
@@ -218,15 +191,6 @@ fn post_process_dictation(text: &str) -> String {
     result = result.replace(" new line", "\n");
     result = result.replace(" new paragraph", "\n\n");
     
-    // Remove common filler words (optional - comment out if users want them)
-    // These are often unintentional in voice dictation
-    let filler_patterns = [
-        (" um ", " "),
-        (" uh ", " "),
-        (" like ", " "), // Note: might remove valid uses, be careful
-        (" you know ", " "),
-    ];
-    
     // Only remove fillers if they appear at the start of sentences
     // to avoid removing valid uses in the middle
     let filler_starters = ["Um ", "Uh ", "Like ", "So ", "Well "];
@@ -248,38 +212,6 @@ fn post_process_dictation(text: &str) -> String {
     }
     
     result
-}
-
-/// Cloud configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CloudConfig {
-    pub stt_provider: STTProvider,
-    pub llm_provider: LLMProvider,
-    pub api_mode: ApiMode,
-    pub api_server_url: String,
-}
-
-impl Default for CloudConfig {
-    fn default() -> Self {
-        Self {
-            stt_provider: STTProvider::Groq,
-            llm_provider: LLMProvider::Groq,
-            api_mode: ApiMode::Remote,
-            api_server_url: std::env::var("LISTENOS_API_URL")
-                .unwrap_or_else(|_| "http://localhost:3001".to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum STTProvider {
-    Groq,       // Whisper via Groq (fastest batch)
-    Deepgram,   // Real-time streaming
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LLMProvider {
-    Groq,       // Llama 3.3 via Groq (20ms latency)
 }
 
 /// Context metadata sent with every request
@@ -377,38 +309,9 @@ impl ActionResult {
     }
 }
 
-/// Dictation style setting (matches config)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DictationStyle {
-    /// Caps + Full punctuation
-    #[default]
-    Formal,
-    /// Caps + Less punctuation
-    Casual,
-    /// No caps + Less punctuation  
-    VeryCasual,
-}
-
-/// Conversation context for multi-turn dialogues
+/// Conversation context placeholder for future multi-turn routing.
 #[derive(Debug, Clone, Default)]
-pub struct ConversationContext {
-    /// Recent conversation history formatted for LLM
-    pub history: String,
-    /// Last action taken
-    pub last_action: Option<String>,
-    /// Last action payload
-    pub last_payload: Option<serde_json::Value>,
-    /// Clipboard preview (first 200 chars)
-    pub clipboard_preview: Option<String>,
-    /// Extracted user facts/preferences
-    pub user_facts: Vec<String>,
-    /// User's custom commands (trigger phrases and IDs)
-    pub custom_commands: Vec<(String, String, String)>, // (trigger, name, id)
-    /// User's text expansion snippets (trigger, expansion)
-    pub snippets: Vec<(String, String)>,
-    /// Current dictation style
-    pub dictation_style: DictationStyle,
-}
+pub struct ConversationContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionType {
@@ -448,19 +351,19 @@ pub enum ActionType {
     WindowControl,      // Control windows (minimize, maximize, close, etc.)
 }
 
-/// Groq API client - Ultra-fast transcription and LLM
-pub struct GroqClient {
+/// Voice client for transcription and local routing
+pub struct VoiceClient {
     client: Client,
 }
 
-impl GroqClient {
+impl VoiceClient {
     pub fn new() -> Self {
         Self {
             client: Client::new(),
         }
     }
 
-    /// Transcribe audio using Groq's Whisper endpoint (fastest in the world)
+    /// Transcribe audio using Deepgram
     /// 
     /// `dictionary_hints` - Optional list of custom words/names to help recognition
     pub async fn transcribe(&self, audio_data: &[u8]) -> Result<TranscriptionResult, String> {
@@ -477,133 +380,98 @@ impl GroqClient {
         // Rate limiting disabled for testing
         // crate::rate_limit::check_stt_limit()?;
         
-        use reqwest::multipart::{Form, Part};
-        
-        let audio_part = Part::bytes(audio_data.to_vec())
-            .file_name("audio.wav")
-            .mime_str("audio/wav")
-            .map_err(|e| format!("Failed to create audio part: {}", e))?;
+        let api_key = get_deepgram_key();
+        if api_key.is_empty() {
+            return Err("Deepgram API key not found. Check your .env.local file.".to_string());
+        }
 
-        let mut form = Form::new()
-            .part("file", audio_part)
-            .text("model", "whisper-large-v3-turbo")
-            .text("response_format", "json");
+        let mut url = reqwest::Url::parse("https://api.deepgram.com/v1/listen")
+            .map_err(|e| format!("Failed to build Deepgram URL: {}", e))?;
 
-        if let Some(lang) = language {
-            let normalized = lang.trim().to_lowercase();
-            if !normalized.is_empty() && normalized != "auto" {
-                form = form.text("language", normalized);
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("model", "nova-3");
+            query.append_pair("smart_format", "true");
+            query.append_pair("punctuate", "true");
+
+            if let Some(lang) = language {
+                let normalized = lang.trim().to_lowercase();
+                if !normalized.is_empty() && normalized != "auto" {
+                    query.append_pair("language", &normalized);
+                }
+            }
+
+            if !dictionary_hints.is_empty() {
+                // Nova-3 uses "keyterm" instead of "keywords"
+                for hint in dictionary_hints.iter().take(50) {
+                    let trimmed = hint.trim();
+                    if !trimmed.is_empty() {
+                        query.append_pair("keyterm", trimmed);
+                    }
+                }
             }
         }
-        
-        // Add dictionary hints as a prompt to improve recognition
-        if !dictionary_hints.is_empty() {
-            // Limit to first 50 words to avoid prompt being too long
-            let hints: Vec<&str> = dictionary_hints.iter()
-                .take(50)
-                .map(|s| s.as_str())
-                .collect();
-            let prompt = format!("Vocabulary hints: {}", hints.join(", "));
-            form = form.text("prompt", prompt);
-            log::info!("Using {} dictionary hints for transcription", hints.len());
-        }
-
-        let api_key = get_groq_key();
-        if api_key.is_empty() {
-            return Err("Groq API key not found. Check your .env.local file.".to_string());
-        }
-        log::info!("Using Groq API key: {}...{}", &api_key[..8.min(api_key.len())], &api_key[api_key.len().saturating_sub(4)..]);
 
         let response = self.client
-            .post("https://api.groq.com/openai/v1/audio/transcriptions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .multipart(form)
+            .post(url)
+            .header("Authorization", format!("Token {}", api_key))
+            .header("Content-Type", "audio/wav")
+            .body(audio_data.to_vec())
             .send()
             .await
-            .map_err(|e| format!("Groq API request failed: {}", e))?;
+            .map_err(|e| format!("Deepgram API request failed: {}", e))?;
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Groq API error: {}", error_text));
+            return Err(format!("Deepgram API error: {}", error_text));
         }
 
         let result: serde_json::Value = response.json().await
-            .map_err(|e| format!("Failed to parse Groq response: {}", e))?;
+            .map_err(|e| format!("Failed to parse Deepgram response: {}", e))?;
+
+        let alternative = result
+            .get("results")
+            .and_then(|r| r.get("channels"))
+            .and_then(|c| c.get(0))
+            .and_then(|c0| c0.get("alternatives"))
+            .and_then(|a| a.get(0))
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let transcript = alternative
+            .get("transcript")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let confidence = alternative
+            .get("confidence")
+            .and_then(|c| c.as_f64())
+            .unwrap_or(0.0) as f32;
 
         Ok(TranscriptionResult {
-            text: result["text"].as_str().unwrap_or("").to_string(),
-            confidence: 0.95,
+            text: transcript,
+            confidence,
             duration_ms: 0,
             is_final: true,
         })
     }
 
-    /// Process text with Groq LLM for intent classification (Llama 3.3 70B)
-    /// Legacy method - forwards to process_intent_with_context with empty context
-    pub async fn process_intent(&self, text: &str, voice_context: &VoiceContext) -> Result<ActionResult, String> {
-        let conv_context = ConversationContext::default();
-        self.process_intent_with_context(text, voice_context, &conv_context).await
-    }
-
     /// Process text with full conversation context for multi-turn dialogues
     pub async fn process_intent_with_context(
-        &self, 
+        &self,
         text: &str, 
-        voice_context: &VoiceContext,
-        conv_context: &ConversationContext,
+        _voice_context: &VoiceContext,
+        _conv_context: &ConversationContext,
     ) -> Result<ActionResult, String> {
-        // Rate limiting disabled for testing
-        // crate::rate_limit::check_llm_limit()?;
-        
-        // 1. Check for local command execution FIRST (bypass LLM for speed/reliability)
+        // 1. Deterministic local command execution
         if let Some(action) = self.detect_local_command(text) {
             log::info!("Local command detected: {:?}", action.action_type);
             return Ok(action);
         }
-        
-        // 2. Fallback to LLM for complex queries
-        let system_prompt = self.build_system_prompt(voice_context, conv_context);
-        let user_message = format!(
-            "User request: \"{}\"\n\nAnalyze and respond with the appropriate action.",
-            text
-        );
 
-        let body = serde_json::json!({
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ],
-            "temperature": 0.2,
-            "max_tokens": 1024,
-            "response_format": {"type": "json_object"}
-        });
-
-        let response = self.client
-            .post("https://api.groq.com/openai/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", get_groq_key()))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Groq LLM request failed: {}", e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Groq LLM error: {}", error_text));
-        }
-
-        let result: serde_json::Value = response.json().await
-            .map_err(|e| format!("Failed to parse Groq LLM response: {}", e))?;
-
-        let content = result["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("{}");
-
-        let parsed: serde_json::Value = serde_json::from_str(content)
-            .unwrap_or(serde_json::json!({"action": "type_text", "refined_text": text}));
-
-        self.parse_llm_response(&parsed, text)
+        // 2. No remote LLM fallback: default to local dictation
+        Ok(ActionResult::type_text(post_process_dictation(text)))
     }
 
     /// Detect if the text is a simple command that can be handled locally
@@ -1134,340 +1002,60 @@ impl GroqClient {
         None
     }
 
-    /// Build the system prompt with context
-    fn build_system_prompt(&self, voice_context: &VoiceContext, conv_context: &ConversationContext) -> String {
-        let mut prompt = String::from(r#"You are ListenOS, a voice-to-action assistant. Analyze user voice input and decide: COMMAND or DICTATION.
-
-=== COMMAND DETECTION ===
-
-Treat as COMMAND if the input:
-1. STARTS with a command verb: open, launch, start, search, google, play, pause, stop, next, previous, skip, mute, unmute, volume, lock, screenshot, shutdown, restart, reboot, sleep, brightness, bluetooth, wifi, close, quit, exit
-2. Is a SHORT phrase (1-4 words) that matches a command pattern
-3. Contains "my computer", "the computer", "my PC" with a system action
-
-Examples of COMMANDS (execute these):
-- "Open Chrome" → open_app
-- "Search for pizza" → web_search  
-- "Play music" → spotify_control
-- "Pause" → spotify_control
-- "Lock my computer" → system_control
-- "Shutdown" → system_control
-- "Volume up" → volume_control
-- "Take a screenshot" → system_control
-- "Organize my downloads" → system_control
-
-=== DICTATION ===
-
-Treat as DICTATION (type_text) if:
-1. It's a complete sentence the user wants typed
-2. Command words appear MID-SENTENCE (not at start)
-3. It's conversational or descriptive text
-
-Examples of DICTATION (type these):
-- "I want to open a new chapter" → type_text (open is mid-sentence)
-- "The meeting was great" → type_text
-- "Please search for the document" → type_text (starts with please)
-- "Can you help me" → type_text
-
-"#);
-
-        // Add context information
-        prompt.push_str("=== CURRENT CONTEXT ===\n");
-        
-        if let Some(ref app) = voice_context.active_app {
-            prompt.push_str(&format!("Active app: {}\n", app));
-        }
-        
-        if let Some(ref clipboard) = conv_context.clipboard_preview {
-            prompt.push_str(&format!("Clipboard preview: \"{}\"\n", clipboard));
-        }
-        
-        if let Some(ref last_action) = conv_context.last_action {
-            prompt.push_str(&format!("Last action: {}\n", last_action));
-        }
-
-        prompt.push_str(&format!("OS: {}\n\n", voice_context.os));
-
-        // Add user's custom commands if any
-        if !conv_context.custom_commands.is_empty() {
-            prompt.push_str("=== USER'S CUSTOM COMMANDS (HIGHEST PRIORITY) ===\n");
-            prompt.push_str("If the user says ANY of these trigger phrases, use custom_command action:\n\n");
-            for (trigger, name, id) in &conv_context.custom_commands {
-                prompt.push_str(&format!(
-                    "- \"{}\" -> {{\"action\": \"custom_command\", \"payload\": {{\"command_id\": \"{}\", \"trigger_phrase\": \"{}\"}}}} ({})",
-                    trigger, id, trigger, name
-                ));
-                prompt.push('\n');
-            }
-            prompt.push('\n');
-        }
-
-        // Add user's text expansion snippets if any
-        if !conv_context.snippets.is_empty() {
-            prompt.push_str("=== USER'S TEXT SNIPPETS (EXPAND ON MATCH) ===\n");
-            prompt.push_str("If the user says EXACTLY one of these trigger phrases, expand to the text using type_text:\n\n");
-            for (trigger, expansion) in &conv_context.snippets {
-                let preview = if expansion.len() > 50 { 
-                    format!("{}...", &expansion[..50]) 
-                } else { 
-                    expansion.clone() 
-                };
-                prompt.push_str(&format!(
-                    "- \"{}\" -> {{\"action\": \"type_text\", \"refined_text\": \"{}\"}}\n",
-                    trigger, preview
-                ));
-            }
-            prompt.push('\n');
-        }
-
-        // Add available actions with clear triggers
-        prompt.push_str(r#"=== AVAILABLE COMMANDS (only when explicitly triggered) ===
-
-APPS & BROWSER:
-- open_app: Trigger words: "open", "launch", "start" + app name
-  Example: "Open Chrome" -> {"action": "open_app", "payload": {"app": "chrome"}}
-  
-- open_url: Trigger words: "open", "go to" + URL/website
-  Example: "Open google.com" -> {"action": "open_url", "payload": {"url": "https://google.com"}}
-  
-- web_search: Trigger words: "search", "google", "look up", "find"
-  Example: "Search for weather" -> {"action": "web_search", "payload": {"query": "weather"}}
-
-MEDIA CONTROL:
-- spotify_control: Trigger words: "play", "pause", "stop", "next", "previous", "skip"
-  Example: "Pause the music" -> {"action": "spotify_control", "payload": {"action": "pause"}}
-  Example: "Play some jazz" -> {"action": "spotify_control", "payload": {"action": "search", "query": "jazz"}}
-
-- volume_control: Trigger words: "volume", "louder", "quieter", "mute"
-  Example: "Volume up" -> {"action": "volume_control", "payload": {"direction": "up"}}
-
-SYSTEM:
-- system_control: Trigger words: "lock", "screenshot", "sleep", "shutdown", "restart", "reboot", "brightness", "bluetooth", "wifi", "night light"
-  Example: "Lock my computer" -> {"action": "system_control", "payload": {"action": "lock"}}
-  Example: "Take a screenshot" -> {"action": "system_control", "payload": {"action": "screenshot"}}
-  Example: "Organize my downloads folder" -> {"action": "system_control", "payload": {"action": "organize_downloads"}}
-  Example: "Shutdown the computer" -> {"action": "system_control", "payload": {"action": "shutdown"}}
-  Example: "Restart" -> {"action": "system_control", "payload": {"action": "restart"}}
-  Example: "Put computer to sleep" -> {"action": "system_control", "payload": {"action": "sleep"}}
-  Example: "Turn on bluetooth" -> {"action": "system_control", "payload": {"action": "bluetooth"}}
-  Example: "Turn off wifi" -> {"action": "system_control", "payload": {"action": "wifi_toggle"}}
-  Example: "Set brightness to 50" -> {"action": "system_control", "payload": {"action": "brightness", "level": 50}}
-  Example: "Turn on night light" -> {"action": "system_control", "payload": {"action": "night_light"}}
-
-CLIPBOARD (only when "clipboard" is mentioned):
-- clipboard_format: "format my clipboard", "clipboard as bullets"
-- clipboard_translate: "translate my clipboard to Spanish"
-- clipboard_summarize: "summarize my clipboard"
-
-DICTATION (DEFAULT - use for everything else):
-- type_text: Used when the user is dictating text to be typed
-  The refined_text field contains the EXACT text to type
-  Example: "Hello how are you" -> {"action": "type_text", "refined_text": "Hello, how are you?"}
-  Example: "I need to finish the report by Friday" -> {"action": "type_text", "refined_text": "I need to finish the report by Friday."}
-
-=== RESPONSE FORMAT (JSON only) ===
-
-{
-  "action": "action_type",
-  "payload": {},
-  "refined_text": "only for type_text - the exact text to type with proper punctuation"
-}
-
-=== EXAMPLES - COMMANDS ===
-
-"Open Chrome" -> {"action": "open_app", "payload": {"app": "chrome"}}
-"Search for Italian restaurants" -> {"action": "web_search", "payload": {"query": "Italian restaurants"}}
-"Pause" -> {"action": "spotify_control", "payload": {"action": "pause"}}
-"Lock computer" -> {"action": "system_control", "payload": {"action": "lock"}}
-"Volume down" -> {"action": "volume_control", "payload": {"direction": "down"}}
-
-=== EXAMPLES - DICTATION (type_text) ===
-
-"Hello world" -> {"action": "type_text", "refined_text": "Hello world."}
-"The meeting is scheduled for 3 PM" -> {"action": "type_text", "refined_text": "The meeting is scheduled for 3 PM."}
-"Dear John comma I hope this email finds you well" -> {"action": "type_text", "refined_text": "Dear John, I hope this email finds you well."}
-"Please review the attached document and let me know your thoughts" -> {"action": "type_text", "refined_text": "Please review the attached document and let me know your thoughts."}
-"I think we should open the discussion with" -> {"action": "type_text", "refined_text": "I think we should open the discussion with"}
-"Can you help me with this" -> {"action": "type_text", "refined_text": "Can you help me with this?"}
-"#);
-
-        // Add style-specific punctuation rules
-        let style_rules = match conv_context.dictation_style {
-            DictationStyle::Formal => r#"
-=== PUNCTUATION RULES FOR type_text (FORMAL STYLE) ===
-
-1. Add periods at the end of complete sentences
-2. Add question marks for questions
-3. Convert spoken punctuation: "comma" -> ",", "period" -> ".", "question mark" -> "?"
-4. Capitalize first letter of sentences and proper nouns
-5. Keep the user's words exactly, just add proper formatting
-6. Use full punctuation including commas in complex sentences
-"#,
-            DictationStyle::Casual => r#"
-=== PUNCTUATION RULES FOR type_text (CASUAL STYLE) ===
-
-1. Capitalize first letter of sentences
-2. Add question marks for questions
-3. Convert spoken punctuation: "comma" -> ",", "period" -> ".", "question mark" -> "?"
-4. Use MINIMAL punctuation - skip periods at end of simple sentences
-5. Skip commas unless explicitly spoken
-6. Keep the casual, natural flow of speech
-
-Examples with CASUAL style:
-- "Hey how are you" -> "Hey how are you"
-- "Let's meet at noon" -> "Let's meet at noon"
-- "Sounds good see you then" -> "Sounds good see you then"
-"#,
-            DictationStyle::VeryCasual => r#"
-=== PUNCTUATION RULES FOR type_text (VERY CASUAL STYLE) ===
-
-1. Use ALL LOWERCASE (no capital letters except proper nouns like names)
-2. Use MINIMAL punctuation - skip periods completely
-3. Only add question marks for questions
-4. Skip commas unless explicitly spoken
-5. Keep it natural like texting a friend
-
-Examples with VERY CASUAL style:
-- "Hey how are you" -> "hey how are you"
-- "Let's meet at noon" -> "let's meet at noon"
-- "Sounds good see you then" -> "sounds good see you then"
-- "Thanks for your help" -> "thanks for your help"
-"#,
-        };
-        prompt.push_str(style_rules);
-
-        prompt
-    }
-
-    /// Parse the LLM response into an ActionResult
-    fn parse_llm_response(&self, parsed: &serde_json::Value, original_text: &str) -> Result<ActionResult, String> {
-        let action_str = parsed["action"].as_str().unwrap_or("type_text");
-        
-        let action_type = match action_str {
-            "open_app" => ActionType::OpenApp,
-            "open_url" => ActionType::OpenUrl,
-            "web_search" => ActionType::WebSearch,
-            "run_command" => ActionType::RunCommand,
-            "volume_control" => ActionType::VolumeControl,
-            "send_email" => ActionType::SendEmail,
-            "multi_step" => ActionType::MultiStep,
-            // Convert respond/clarify to type_text to avoid confusion
-            // (nothing visible happens with respond, which frustrates users)
-            "respond" | "clarify" => {
-                // If there's a response_text, type it instead of doing nothing
-                if let Some(response) = parsed["response_text"].as_str() {
-                    return Ok(ActionResult {
-                        action_type: ActionType::TypeText,
-                        payload: serde_json::json!({}),
-                        refined_text: Some(post_process_dictation(response)),
-                        response_text: None,
-                        requires_confirmation: false,
-                    });
-                }
-                ActionType::TypeText
-            },
-            "clipboard_format" => ActionType::ClipboardFormat,
-            "clipboard_translate" => ActionType::ClipboardTranslate,
-            "clipboard_summarize" => ActionType::ClipboardSummarize,
-            "clipboard_clean" => ActionType::ClipboardClean,
-            "spotify_control" => ActionType::SpotifyControl,
-            "discord_control" => ActionType::DiscordControl,
-            "system_control" => ActionType::SystemControl,
-            "custom_command" => ActionType::CustomCommand,
-            "keyboard_shortcut" => ActionType::KeyboardShortcut,
-            "window_control" => ActionType::WindowControl,
-            "no_action" => ActionType::NoAction,
-            _ => ActionType::TypeText,
-        };
-
-        // For type_text, ensure we have text to type and post-process it
-        let refined_text = if action_type == ActionType::TypeText {
-            parsed["refined_text"]
-                .as_str()
-                .map(|s| post_process_dictation(s))
-                // Fallback: use original transcription if no refined_text
-                .or_else(|| Some(post_process_dictation(original_text)))
-        } else {
-            parsed["refined_text"].as_str().map(|s| s.to_string())
-        };
-
-        Ok(ActionResult {
-            action_type,
-            payload: parsed["payload"].clone(),
-            refined_text,
-            response_text: parsed["response_text"].as_str().map(|s| s.to_string()),
-            requires_confirmation: false,
-        })
-    }
-
     /// Process clipboard operations with LLM
     pub async fn process_clipboard(&self, content: &str, operation: &str, params: &serde_json::Value) -> Result<String, String> {
-        let prompt = match operation {
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            return Ok(String::new());
+        }
+
+        let output = match operation {
             "format" => {
-                let format_type = params.get("format").and_then(|v| v.as_str()).unwrap_or("paragraph");
-                format!(
-                    "Format the following text as a {}. Only output the formatted text, nothing else:\n\n{}",
-                    format_type, content
-                )
+                let format_type = params
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("paragraph")
+                    .to_lowercase();
+
+                let normalized = post_process_dictation(trimmed);
+                if format_type.contains("bullet") || format_type.contains("list") {
+                    normalized
+                        .split(['.', '\n'])
+                        .map(|line| line.trim())
+                        .filter(|line| !line.is_empty())
+                        .map(|line| format!("- {}", line))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    normalized
+                }
             }
             "translate" => {
-                let target = params.get("target_language").and_then(|v| v.as_str()).unwrap_or("Spanish");
-                format!(
-                    "Translate the following text to {}. Only output the translation, nothing else:\n\n{}",
-                    target, content
-                )
+                return Err("Clipboard translation requires an LLM provider; currently disabled in local mode".to_string())
             }
             "summarize" => {
-                format!(
-                    "Summarize the following text in 2-3 sentences. Only output the summary, nothing else:\n\n{}",
-                    content
-                )
+                let normalized = post_process_dictation(trimmed);
+                let sentences: Vec<&str> = normalized
+                    .split(['.', '!', '?'])
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if sentences.is_empty() {
+                    normalized
+                } else {
+                    let take = sentences.iter().take(3).cloned().collect::<Vec<_>>().join(". ");
+                    if take.ends_with('.') { take } else { format!("{}.", take) }
+                }
             }
-            "clean" => {
-                format!(
-                    "Clean up the following text: fix grammar, remove extra whitespace, add proper punctuation. Only output the cleaned text, nothing else:\n\n{}",
-                    content
-                )
-            }
+            "clean" => post_process_dictation(trimmed),
             _ => return Err(format!("Unknown clipboard operation: {}", operation)),
         };
 
-        let body = serde_json::json!({
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.3,
-            "max_tokens": 2048
-        });
-
-        let response = self.client
-            .post("https://api.groq.com/openai/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", get_groq_key()))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Groq request failed: {}", e))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Groq error: {}", error_text));
-        }
-
-        let result: serde_json::Value = response.json().await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-        let content = result["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        Ok(content)
+        Ok(output)
     }
 }
 
-impl Default for GroqClient {
+impl Default for VoiceClient {
     fn default() -> Self {
         Self::new()
     }
@@ -1505,7 +1093,7 @@ impl Default for DeepgramClient {
 /// Public helper for deterministic command routing without calling the LLM.
 /// Returns `Some(ActionResult)` only for unambiguous command phrases.
 pub fn detect_local_command(text: &str) -> Option<ActionResult> {
-    GroqClient::new().detect_local_command(text)
+    VoiceClient::new().detect_local_command(text)
 }
 
 /// Encode PCM samples to WAV format for API upload

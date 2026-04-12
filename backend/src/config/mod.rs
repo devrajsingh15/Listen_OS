@@ -273,7 +273,6 @@ pub enum ListeningMode {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ApiKeys {
     pub openai: Option<String>,
-    pub groq: Option<String>,
     pub openrouter: Option<String>,
     pub anthropic: Option<String>,
 }
@@ -281,8 +280,7 @@ pub struct ApiKeys {
 /// Local runtime API settings persisted on device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalApiSettings {
-    pub use_remote_api: bool,
-    pub groq_api_key: String,
+    pub deepgram_api_key: String,
 }
 
 impl LocalApiSettings {
@@ -316,13 +314,7 @@ impl LocalApiSettings {
 impl Default for LocalApiSettings {
     fn default() -> Self {
         Self {
-            use_remote_api: std::env::var("LISTENOS_USE_REMOTE_API")
-                .map(|v| {
-                    let value = v.trim().to_lowercase();
-                    matches!(value.as_str(), "1" | "true" | "yes" | "on")
-                })
-                .unwrap_or(false),
-            groq_api_key: std::env::var("GROQ_API_KEY").unwrap_or_default(),
+            deepgram_api_key: std::env::var("DEEPGRAM_API_KEY").unwrap_or_default(),
         }
     }
 }

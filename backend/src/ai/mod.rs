@@ -58,7 +58,6 @@ pub struct TranscriptSegment {
 pub enum AIProvider {
     Local,       // whisper-rs + llama-cpp-rs
     OpenAI,      // API fallback
-    Groq,        // Fast API alternative
     OpenRouter,  // Multi-model router
 }
 
@@ -100,7 +99,6 @@ impl AIEngine {
         match self.provider {
             AIProvider::Local => self.transcribe_local(samples, sample_rate).await,
             AIProvider::OpenAI => self.transcribe_openai(samples, sample_rate).await,
-            AIProvider::Groq => self.transcribe_groq(samples, sample_rate).await,
             AIProvider::OpenRouter => self.transcribe_openrouter(samples, sample_rate).await,
         }
     }
@@ -114,11 +112,6 @@ impl AIEngine {
     async fn transcribe_openai(&self, _samples: &[f32], _sample_rate: u32) -> Result<String, String> {
         // TODO: Implement OpenAI Whisper API
         Err("OpenAI API not yet implemented".to_string())
-    }
-
-    async fn transcribe_groq(&self, _samples: &[f32], _sample_rate: u32) -> Result<String, String> {
-        // TODO: Implement Groq API for fast transcription
-        Err("Groq API not yet implemented".to_string())
     }
 
     async fn transcribe_openrouter(&self, _samples: &[f32], _sample_rate: u32) -> Result<String, String> {

@@ -68,7 +68,6 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
 
   useEffect(() => {
     if (isOpen && isTauri()) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       loadData();
     }
   }, [isOpen, loadData]);
@@ -113,8 +112,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
 
     setApiSettingsSaving(true);
     try {
-      const existing = await getLocalApiSettings();
-      await setLocalApiSettings(existing.use_remote_api, cleaned);
+      await setLocalApiSettings(cleaned);
       nextStep();
     } catch (error) {
       console.error("Failed to save Deepgram API key:", error);
@@ -165,8 +163,17 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
     onComplete();
   };
 
-  const steps: Step[] = ["welcome", "api-key", "microphone", "test", "commands", "complete"];
+  const hasSavedApiKey = deepgramApiKey.trim().length > 0;
+  const steps: Step[] = hasSavedApiKey
+    ? ["welcome", "microphone", "test", "commands", "complete"]
+    : ["welcome", "api-key", "microphone", "test", "commands", "complete"];
   const currentStepIndex = steps.indexOf(step);
+
+  useEffect(() => {
+    if (hasSavedApiKey && step === "api-key") {
+      setStep("microphone");
+    }
+  }, [hasSavedApiKey, step]);
 
   const nextStep = () => {
     const nextIndex = currentStepIndex + 1;

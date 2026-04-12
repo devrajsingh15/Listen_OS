@@ -10,13 +10,13 @@ use std::collections::VecDeque;
 /// Types of errors that can occur
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ErrorType {
-    Transcription,      // Whisper API failed
-    LLMProcessing,      // Groq LLM failed  
-    ActionExecution,    // Command execution failed
-    AudioCapture,       // Microphone/recording issue
-    Network,            // Network/API connectivity
-    RateLimit,          // API rate limit hit
-    Unknown,            // Other errors
+    Transcription,   // Whisper API failed
+    LLMProcessing,   // Intent/LLM processing failed
+    ActionExecution, // Command execution failed
+    AudioCapture,    // Microphone/recording issue
+    Network,         // Network/API connectivity
+    RateLimit,       // API rate limit hit
+    Unknown,         // Other errors
 }
 
 /// A logged error entry
@@ -64,14 +64,15 @@ impl ErrorLog {
 
     /// Log a new error
     pub fn log(&mut self, entry: ErrorEntry) {
-        log::error!("[{}] {}: {}", 
+        log::error!(
+            "[{}] {}: {}",
             format!("{:?}", entry.error_type),
             entry.message,
             entry.details.as_deref().unwrap_or("")
         );
-        
+
         self.entries.push_front(entry);
-        
+
         // Keep under max
         while self.entries.len() > self.max_entries {
             self.entries.pop_back();
@@ -84,13 +85,19 @@ impl ErrorLog {
     }
 
     /// Log an error with details
-    pub fn log_error_with_details(&mut self, error_type: ErrorType, message: impl Into<String>, details: impl Into<String>) {
+    pub fn log_error_with_details(
+        &mut self,
+        error_type: ErrorType,
+        message: impl Into<String>,
+        details: impl Into<String>,
+    ) {
         self.log(ErrorEntry::new(error_type, message).with_details(details));
     }
 
     /// Get all undismissed errors
     pub fn get_undismissed(&self) -> Vec<ErrorEntry> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .filter(|e| !e.dismissed)
             .cloned()
             .collect()
@@ -98,10 +105,7 @@ impl ErrorLog {
 
     /// Get recent errors (last n)
     pub fn get_recent(&self, limit: usize) -> Vec<ErrorEntry> {
-        self.entries.iter()
-            .take(limit)
-            .cloned()
-            .collect()
+        self.entries.iter().take(limit).cloned().collect()
     }
 
     /// Dismiss an error by ID

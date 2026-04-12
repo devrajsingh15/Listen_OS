@@ -133,7 +133,7 @@ ListenOS/
 └── backend/                   # Rust backend
     └── src/
         ├── audio/             # Audio capture (cpal)
-        ├── cloud/             # Groq & Deepgram APIs
+        ├── cloud/             # AI provider clients
         ├── commands/          # Tauri command handlers
         ├── streaming/         # Audio streaming
         └── system/            # OS integrations
@@ -144,8 +144,8 @@ ListenOS/
 - **Frontend**: Next.js 16, React 19, Tailwind CSS, Radix UI
 - **Backend**: Rust, Tauri 2.0
 - **AI Services**: 
-  - **Speech-to-Text**: Groq Whisper (whisper-large-v3-turbo)
-  - **Intent Processing**: Groq LLaMA 3.3 70B
+  - **Speech-to-Text**: Deepgram
+  - **Intent Processing**: Local desktop pipeline
 - **Audio**: cpal for native audio capture
 
 ## ⚙️ Configuration
@@ -156,43 +156,39 @@ The default trigger is **Ctrl+Space**. You can change this in the Settings modal
 
 ### API Keys
 
-ListenOS requires your own Groq API key for self-hosted processing.
+ListenOS requires your own Deepgram API key for local processing.
 
-First-run onboarding asks for this key, and you can update it later in **Settings -> System -> Groq API key**.
+First-run onboarding asks for this key, and you can update it later in **Settings -> System -> Deepgram API key**.
 
 You can also set keys in `.env.local`:
 
 1. Create/edit `.env.local` in the project root
 2. Add your keys:
    ```env
-   GROQ_API_KEY=your_groq_api_key_here
    DEEPGRAM_API_KEY=your_deepgram_api_key_here
    ```
 
 Get your keys:
-- **Groq**: [console.groq.com](https://console.groq.com)
 - **Deepgram**: [console.deepgram.com](https://console.deepgram.com)
 
 ### Onboarding
 
 On first launch, onboarding walks through:
 
-1. Entering your Groq API key
+1. Entering your Deepgram API key
 2. Selecting a microphone
 3. Running a microphone test
 4. Optionally adding starter command templates
 
 Bluetooth hands-free microphone profiles are blocked by default to prevent output-audio hijacking on headsets.
 
-### Fully Local Routing (Desktop)
+### Local Runtime (Desktop)
 
-You can run voice processing without the ListenOS cloud API:
+ListenOS runs as a local desktop runtime by default.
 
 1. Open **Settings -> System**
-2. Turn **Use ListenOS cloud routing** off
-3. Paste your Groq key in **Groq API key** and save
-
-When cloud routing is off, transcription + intent processing run through direct Groq API calls from your desktop app.
+2. Paste your key in **Deepgram API key**
+3. Save and use the assistant normally
 
 ## 🔧 Development
 
@@ -281,8 +277,7 @@ This project is proprietary software. See [LICENSE](LICENSE) for licensing terms
 ## 🙏 Acknowledgments
 
 - [Tauri](https://tauri.app/) - For the amazing desktop framework
-- [Groq](https://groq.com/) - For ultra-fast AI inference
-- [Deepgram](https://deepgram.com/) - Optional speech tooling integration
+- [Deepgram](https://deepgram.com/) - Speech-to-text provider
 
 <p align="center">
   <strong>Developed by ListenOS</strong><br>
