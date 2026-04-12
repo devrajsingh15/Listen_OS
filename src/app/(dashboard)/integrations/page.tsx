@@ -104,7 +104,9 @@ export default function IntegrationsPage() {
                   <div
                     className={cn(
                       "flex h-14 w-14 items-center justify-center rounded-xl",
-                      integration.available ? "bg-primary/10 text-primary" : "bg-gray-500/10 text-gray-500"
+                      integration.available
+                        ? "bg-primary/10 text-primary"
+                        : "bg-surface-elevated text-muted"
                     )}
                   >
                     {getIntegrationIcon(integration.name)}
@@ -115,7 +117,7 @@ export default function IntegrationsPage() {
                         {integration.name}
                       </h3>
                       {!integration.available && (
-                        <span className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-xs text-yellow-400">
+                        <span className="rounded-full border border-warning-border bg-warning-surface px-2 py-0.5 text-xs text-warning">
                           Not Installed
                         </span>
                       )}
@@ -151,10 +153,10 @@ export default function IntegrationsPage() {
                         className="peer sr-only"
                       />
                       <div className={cn(
-                        "peer h-6 w-11 rounded-full after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:after:translate-x-full peer-focus:outline-none",
+                        "peer h-6 w-11 rounded-full after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-border after:bg-background after:transition-all after:content-[''] peer-checked:after:translate-x-full peer-focus:outline-none",
                         integration.available 
-                          ? "bg-gray-600 peer-checked:bg-primary" 
-                          : "bg-gray-700 cursor-not-allowed"
+                          ? "bg-border peer-checked:bg-primary" 
+                          : "bg-border/70 cursor-not-allowed"
                       )}></div>
                     </label>
                   </div>

@@ -129,8 +129,10 @@ export default function TonePage() {
               {/* Avatar indicator */}
               <div
                 className={cn(
-                  "absolute bottom-4 right-4 flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold text-white",
-                  selectedTone === tone.id ? "bg-primary" : "bg-pink-400"
+                  "absolute bottom-4 right-4 flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold",
+                  selectedTone === tone.id
+                    ? "bg-primary text-background"
+                    : "bg-surface-elevated text-muted"
                 )}
               >
                 J

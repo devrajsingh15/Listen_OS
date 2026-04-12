@@ -136,7 +136,7 @@ export default function SnippetsPage() {
           <h1 className="text-2xl font-semibold text-foreground">Snippets</h1>
           <button 
             onClick={() => openEditor()}
-            className="flex items-center gap-2 rounded-lg bg-foreground px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-foreground/90"
+            className="flex items-center gap-2 rounded-lg bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90"
           >
             <HugeiconsIcon icon={Add01Icon} size={16} />
             Add new
@@ -184,7 +184,7 @@ export default function SnippetsPage() {
           <div className="relative rounded-xl bg-card-feature p-6">
             <button
               onClick={() => setShowTip(false)}
-              className="absolute right-4 top-4 rounded-lg p-1 text-muted transition-colors hover:bg-white/50 hover:text-foreground"
+              className="absolute right-4 top-4 rounded-lg p-1 text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
             >
               <HugeiconsIcon icon={Cancel01Icon} size={18} />
             </button>
@@ -202,7 +202,7 @@ export default function SnippetsPage() {
             <div className="mb-4 space-y-2">
               {exampleSnippets.map((snippet) => (
                 <div key={snippet.trigger} className="flex items-center gap-3">
-                  <span className="rounded-lg border border-border bg-white px-3 py-1.5 text-sm text-foreground">
+                  <span className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground">
                     {snippet.trigger}
                   </span>
                   <HugeiconsIcon icon={ArrowRight01Icon} size={16} className="text-muted" />
@@ -214,7 +214,7 @@ export default function SnippetsPage() {
             </div>
             <button 
               onClick={() => openEditor()}
-              className="rounded-lg bg-foreground px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-foreground/90"
+              className="rounded-lg bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90"
             >
               Add new snippet
             </button>
@@ -258,7 +258,7 @@ export default function SnippetsPage() {
                   </button>
                   <button
                     onClick={() => handleDeleteSnippet(snippet.id)}
-                    className="rounded-lg p-1.5 text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
+                    className="rounded-lg p-1.5 text-muted transition-colors hover:bg-danger-surface hover:text-danger"
                     title="Delete"
                   >
                     <HugeiconsIcon icon={Delete02Icon} size={14} />
@@ -337,7 +337,7 @@ export default function SnippetsPage() {
                 <button
                   onClick={editingSnippet ? handleUpdateSnippet : handleCreateSnippet}
                   disabled={!trigger.trim() || !expansion.trim()}
-                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {editingSnippet ? "Save Changes" : "Create Snippet"}
                 </button>

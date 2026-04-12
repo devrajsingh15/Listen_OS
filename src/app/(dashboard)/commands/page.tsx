@@ -183,7 +183,7 @@ export default function CommandsPage() {
             </button>
             <button
               onClick={createNewCommand}
-              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
+              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -238,7 +238,7 @@ export default function CommandsPage() {
               </p>
               <button
                 onClick={() => setActiveTab("templates")}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
               >
                 Browse Templates
               </button>
@@ -262,7 +262,7 @@ export default function CommandsPage() {
                         onChange={(e) => handleToggleEnabled(cmd.id, e.target.checked)}
                         className="peer sr-only"
                       />
-                      <div className="peer h-5 w-9 rounded-full bg-gray-600 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-focus:outline-none"></div>
+                      <div className="peer h-5 w-9 rounded-full bg-border after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-border after:bg-background after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-focus:outline-none"></div>
                     </label>
                   </div>
                   <p className="mb-3 text-sm text-muted line-clamp-2">{cmd.description}</p>
@@ -295,7 +295,7 @@ export default function CommandsPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(cmd.id)}
-                        className="hover:text-red-400"
+                        className="hover:text-danger"
                       >
                         Delete
                       </button>
@@ -329,7 +329,7 @@ export default function CommandsPage() {
                 </div>
                 <button
                   onClick={() => handleUseTemplate(template)}
-                  className="w-full rounded-lg border border-primary px-3 py-2 text-sm font-medium text-primary hover:bg-primary hover:text-white"
+                  className="w-full rounded-lg border border-primary px-3 py-2 text-sm font-medium text-primary hover:bg-primary hover:text-background"
                 >
                   Use This Template
                 </button>
@@ -500,7 +500,7 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
                   <span className="text-xs text-muted">ms</span>
                   <button
                     onClick={() => removeAction(action.id)}
-                    className="text-red-400 hover:text-red-300"
+                    className="text-danger hover:opacity-80"
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -533,7 +533,7 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
           </button>
           <button
             onClick={handleSave}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
           >
             Save Command
           </button>

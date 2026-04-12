@@ -2,29 +2,31 @@
 
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
+import type { ComponentType } from "react";
+import type { IconProps } from "@solar-icons/react";
+import {
+  Book,
+  ChatRound,
+  ClipboardText,
+  Command,
+  Gift,
+  HomeSmile,
+  PlugCircle,
+  QuestionCircle,
+  Scissors,
+  Settings,
+  Text,
+  UsersGroupRounded,
+} from "@solar-icons/react";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/tauri";
-import {
-  Home03Icon,
-  Book02Icon,
-  Scissor01Icon,
-  TextFontIcon,
-  NoteIcon,
-  UserGroupIcon,
-  GiftIcon,
-  Settings02Icon,
-  HelpCircleIcon,
-  Message01Icon,
-  CommandIcon,
-  Copy01Icon,
-  PlugIcon,
-} from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
+
+type SidebarIcon = ComponentType<IconProps>;
 
 interface NavItem {
   label: string;
   href: string;
-  icon: typeof Home03Icon;
+  icon: SidebarIcon;
   isNew?: boolean;
 }
 
@@ -35,26 +37,23 @@ interface NavSection {
 
 const navSections: NavSection[] = [
   {
-    items: [
-      { label: "Dashboard", href: "/", icon: Home03Icon },
-    ],
+    items: [{ label: "Dashboard", href: "/", icon: HomeSmile }],
   },
   {
     title: "AI Assistant",
     items: [
-      { label: "Conversation", href: "/conversation", icon: Message01Icon, isNew: true },
-      { label: "Commands", href: "/commands", icon: CommandIcon, isNew: true },
-      { label: "Clipboard", href: "/clipboard", icon: Copy01Icon, isNew: true },
-      { label: "Integrations", href: "/integrations", icon: PlugIcon, isNew: true },
+      { label: "Conversation", href: "/conversation", icon: ChatRound, isNew: true },
+      { label: "Commands", href: "/commands", icon: Command, isNew: true },
+      { label: "Clipboard", href: "/clipboard", icon: ClipboardText, isNew: true },
+      { label: "Integrations", href: "/integrations", icon: PlugCircle, isNew: true },
     ],
   },
   {
     title: "Tools",
     items: [
-      { label: "Dictionary", href: "/dictionary", icon: Book02Icon },
-      { label: "Snippets", href: "/snippets", icon: Scissor01Icon },
-      { label: "Tone", href: "/tone", icon: TextFontIcon },
-      { label: "Notes", href: "/notes", icon: NoteIcon },
+      { label: "Dictionary", href: "/dictionary", icon: Book },
+      { label: "Snippets", href: "/snippets", icon: Scissors },
+      { label: "Tone", href: "/tone", icon: Text },
     ],
   },
 ];
@@ -63,67 +62,64 @@ interface SidebarProps {
   onSettingsClick: () => void;
 }
 
+const navItemBaseClass =
+  "ui-hover-surface flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors";
+
 export function Sidebar({ onSettingsClick }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
 
   const handleNavigation = (href: string) => {
     if (isTauri()) {
-      // In Tauri, use window.location for reliable navigation
       window.location.assign(href);
-    } else {
-      router.push(href);
+      return;
     }
+
+    router.push(href);
   };
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r border-border bg-sidebar-bg">
-      {/* Logo */}
-      <div className="flex items-center gap-2 px-5 py-5">
-        <Image
-          src="/logo.svg"
-          alt="ListenOS Logo"
-          width={28}
-          height={28}
-          className="w-7 h-7"
-        />
-        <span className="text-lg font-semibold text-foreground">ListenOS</span>
+    <aside className="fixed left-0 top-0 z-40 flex h-screen w-60 flex-col border-r border-border bg-sidebar-bg">
+      <div className="border-b border-border px-5 py-5">
+        <div className="flex items-center gap-3">
+          <Image src="/Logo.svg" alt="ListenOS Logo" width={30} height={30} className="h-7 w-7" />
+          <div className="min-w-0">
+            <p className="truncate text-base font-semibold text-foreground">ListenOS</p>
+            <p className="text-xs text-muted">Local workspace</p>
+          </div>
+        </div>
       </div>
 
-      {/* Main Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-2">
+      <nav className="flex-1 overflow-y-auto px-3 py-4">
         {navSections.map((section, sectionIndex) => (
-          <div key={sectionIndex} className={sectionIndex > 0 ? "mt-4" : ""}>
+          <div key={sectionIndex} className={sectionIndex > 0 ? "mt-5" : ""}>
             {section.title && (
-              <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted">
+              <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-[0.14em] text-muted">
                 {section.title}
               </h3>
             )}
+
             <ul className="space-y-1">
               {section.items.map((item) => {
                 const isActive = pathname === item.href;
+                const Icon = item.icon;
+
                 return (
                   <li key={item.href}>
                     <button
                       onClick={() => handleNavigation(item.href)}
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-left cursor-pointer",
+                        navItemBaseClass,
                         isActive
-                          ? "bg-sidebar-active text-foreground"
-                          : "text-muted hover:bg-sidebar-hover hover:text-foreground"
+                          ? "bg-sidebar-active text-primary"
+                          : "text-muted hover:text-primary"
                       )}
                     >
-                      <HugeiconsIcon
-                        icon={item.icon}
-                        size={18}
-                        className={cn(
-                          isActive ? "text-foreground" : "text-muted"
-                        )}
-                      />
-                      {item.label}
+                      <Icon size={18} weight="Bold" className="shrink-0" />
+                      <span className="truncate">{item.label}</span>
                       {item.isNew && (
-                        <span className="ml-auto rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                          NEW
+                        <span className="ml-auto rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                          New
                         </span>
                       )}
                     </button>
@@ -135,40 +131,35 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
         ))}
       </nav>
 
-      {/* Bottom Actions */}
       <div className="border-t border-border px-3 py-3">
         <ul className="space-y-1">
           <li>
-            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer">
-              <HugeiconsIcon icon={UserGroupIcon} size={18} />
-              Invite your team
+            <button className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
+              <UsersGroupRounded size={18} weight="Bold" className="shrink-0" />
+              <span>Invite your team</span>
             </button>
           </li>
           <li>
-            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer">
-              <HugeiconsIcon icon={GiftIcon} size={18} />
-              Get a free month
+            <button className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
+              <Gift size={18} weight="Bold" className="shrink-0" />
+              <span>Get a free month</span>
             </button>
           </li>
           <li>
-            <button
-              onClick={onSettingsClick}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer"
-            >
-              <HugeiconsIcon icon={Settings02Icon} size={18} />
-              Settings
+            <button onClick={onSettingsClick} className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
+              <Settings size={18} weight="Bold" className="shrink-0" />
+              <span>Settings</span>
             </button>
           </li>
           <li>
-            <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground cursor-pointer">
-              <HugeiconsIcon icon={HelpCircleIcon} size={18} />
-              Help
+            <button className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
+              <QuestionCircle size={18} weight="Bold" className="shrink-0" />
+              <span>Help</span>
             </button>
           </li>
         </ul>
       </div>
 
-      {/* User Account */}
       <div className="border-t border-border px-3 py-3">
         <UserAccountSection />
       </div>
@@ -178,18 +169,17 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
 
 function UserAccountSection() {
   return (
-    <div className="flex items-center gap-3 rounded-lg px-3 py-2">
-      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white text-sm font-medium">
+    <div className="flex items-center gap-3 rounded-xl px-3 py-2.5">
+      <div className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-surface text-sm font-semibold text-primary">
         L
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate">Local user</p>
-        <p className="text-xs text-muted truncate">Self-hosted</p>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">Local user</p>
+        <p className="truncate text-xs text-muted">Self-hosted</p>
       </div>
-      <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-500">
+      <span className="rounded-full border border-border bg-success-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-success-text">
         Local
       </span>
     </div>
   );
 }
-
