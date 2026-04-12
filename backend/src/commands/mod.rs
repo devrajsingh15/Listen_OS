@@ -1758,8 +1758,8 @@ async fn open_url_internal(url: &str) -> Result<CommandResult, String> {
     #[cfg(windows)]
     {
         use std::process::Command;
-        let result = Command::new("cmd")
-            .args(["/C", "start", "", &normalized_url])
+        let result = Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &normalized_url])
             .spawn();
 
         match result {
@@ -1998,14 +1998,9 @@ async fn execute_action_internal(
                                     "Primary launch failed, trying web fallback: {}",
                                     web_url
                                 );
-                                let _ = Command::new("cmd")
-                                    .args(["/C", "start", "", web_url])
-                                    .spawn();
-                                return Ok(CommandResult {
-                                    success: true,
-                                    message: format!("Opened {} (web)", app),
-                                    output: None,
-                                });
+                                let mut result = open_url_internal(web_url).await?;
+                                result.message = format!("Opened {} (web)", app);
+                                return Ok(result);
                             }
                         }
                     }
@@ -2126,17 +2121,9 @@ async fn execute_action_internal(
 
             #[cfg(windows)]
             {
-                use std::process::Command;
-                let result = Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-
-                match result {
-                    Ok(_) => Ok(CommandResult {
-                        success: true,
-                        message: format!("Searching: {}", query),
-                        output: None,
-                    }),
-                    Err(e) => Err(format!("Failed to search: {}", e)),
-                }
+                let mut result = open_url_internal(&url).await?;
+                result.message = format!("Searching: {}", query);
+                Ok(result)
             }
 
             #[cfg(not(windows))]
@@ -2263,19 +2250,9 @@ async fn execute_action_internal(
 
             #[cfg(windows)]
             {
-                use std::process::Command;
-                let result = Command::new("cmd")
-                    .args(["/C", "start", "", &gmail_url])
-                    .spawn();
-
-                match result {
-                    Ok(_) => Ok(CommandResult {
-                        success: true,
-                        message: format!("Composing email to: {}", to),
-                        output: None,
-                    }),
-                    Err(e) => Err(format!("Failed to open email: {}", e)),
-                }
+                let mut result = open_url_internal(&gmail_url).await?;
+                result.message = format!("Composing email to: {}", to);
+                Ok(result)
             }
 
             #[cfg(not(windows))]
@@ -3129,6 +3106,11 @@ async fn execute_spotify_action(
         .get("action")
         .and_then(|v| v.as_str())
         .unwrap_or("play_pause");
+
+    let spotify_action = match spotify_action {
+        "play" | "pause" | "resume" | "toggle" => "play_pause",
+        other => other,
+    };
 
     let spotify_action_id = format!("spotify_{}", spotify_action);
 

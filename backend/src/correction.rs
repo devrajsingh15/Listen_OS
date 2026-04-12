@@ -123,6 +123,11 @@ fn is_likely_correction(original: &str, corrected: &str) -> bool {
         return false;
     }
 
+    let edit_distance = levenshtein_distance(&orig_lower, &corr_lower);
+    if (1..=2).contains(&edit_distance) {
+        return true;
+    }
+
     // Count matching characters in order
     let matching = count_matching_chars(&orig_lower, &corr_lower);
     let min_len = orig_lower.len().min(corr_lower.len());
@@ -133,6 +138,26 @@ fn is_likely_correction(original: &str, corrected: &str) -> bool {
     // It's a correction if:
     // - High similarity (60-95% matching) - not too similar (typo), not too different (different word)
     match_ratio >= 0.5 && match_ratio < 1.0
+}
+
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut costs: Vec<usize> = (0..=b_chars.len()).collect();
+
+    for (i, a_char) in a.chars().enumerate() {
+        let mut previous_diagonal = costs[0];
+        costs[0] = i + 1;
+
+        for (j, b_char) in b_chars.iter().enumerate() {
+            let insertion = costs[j + 1] + 1;
+            let deletion = costs[j] + 1;
+            let substitution = previous_diagonal + usize::from(a_char != *b_char);
+            previous_diagonal = costs[j + 1];
+            costs[j + 1] = insertion.min(deletion).min(substitution);
+        }
+    }
+
+    costs[b_chars.len()]
 }
 
 /// Count characters that match in order between two strings

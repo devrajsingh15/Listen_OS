@@ -160,8 +160,8 @@ impl SystemController {
 
     fn open_url(&self, url: &str) -> Result<String, String> {
         #[cfg(windows)]
-        let result = std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
+        let result = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
             .spawn();
 
         #[cfg(target_os = "macos")]

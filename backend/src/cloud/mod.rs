@@ -1342,6 +1342,26 @@ mod tests {
         assert!(!prompt.contains("  "));
     }
 
+    #[test]
+    fn detects_specific_song_play_requests() {
+        let action = detect_local_command("play 505 by Arctic Monkeys")
+            .expect("song playback should be routed locally");
+
+        assert_eq!(action.action_type, ActionType::SpotifyControl);
+        assert_eq!(action.payload["action"], "play_song");
+        assert_eq!(action.payload["query"], "505 by arctic monkeys");
+    }
+
+    #[test]
+    fn detects_youtube_music_play_requests() {
+        let action = detect_local_command("play some lofi music on YouTube")
+            .expect("youtube music playback should be routed locally");
+
+        assert_eq!(action.action_type, ActionType::SpotifyControl);
+        assert_eq!(action.payload["action"], "play_song");
+        assert_eq!(action.payload["query"], "some lofi music on youtube");
+    }
+
     #[tokio::test]
     #[ignore = "requires LISTEN_OS_GROQ_E2E_AUDIO_FILE, LISTEN_OS_GROQ_E2E_EXPECT, and GROQ_API_KEY"]
     async fn groq_transcription_fixture_roundtrip() {

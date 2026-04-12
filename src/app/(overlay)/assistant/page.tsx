@@ -289,7 +289,7 @@ export default function AssistantPage() {
     ? "rgba(74,222,128,0.5)"
     : state === "error"
     ? "rgba(248,113,113,0.5)"
-    : "transparent";
+    : "rgba(0,0,0,0)";
 
   return (
     <div className="h-full w-full flex flex-col items-center justify-end pb-2 relative" style={{ background: "transparent" }}>

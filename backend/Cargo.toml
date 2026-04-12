@@ -40,7 +40,7 @@ tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 futures-util = "0.3"
 
 # HTTP Client for API calls
-reqwest = { version = "0.11", features = ["json", "multipart", "stream"] }
+reqwest = { version = "0.11", features = ["blocking", "json", "multipart", "stream"] }
 
 # System Control
 enigo = "0.2"
