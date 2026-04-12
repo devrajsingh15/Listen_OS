@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/AppShell";
+import * as Select from "@/components/ui/select";
 import {
   isTauri,
   getCustomCommands,
@@ -459,17 +460,24 @@ function CommandEditor({ command, onSave, onClose }: CommandEditorProps) {
                     {index + 1}
                   </span>
                   <div className="flex-1">
-                    <select
+                    <Select.Root
                       value={action.action_type}
-                      onChange={(e) => updateAction(action.id, { action_type: e.target.value })}
-                      className="w-full rounded border border-border bg-background px-2 py-1 text-sm"
+                      onValueChange={(value) =>
+                        updateAction(action.id, { action_type: value })
+                      }
+                      size="xsmall"
                     >
-                      {ACTION_TYPES.map((type) => (
-                        <option key={type.id} value={type.id}>
-                          {type.icon} {type.name}
-                        </option>
-                      ))}
-                    </select>
+                      <Select.Trigger className="w-full rounded bg-background">
+                        <Select.Value />
+                      </Select.Trigger>
+                      <Select.Content>
+                        {ACTION_TYPES.map((type) => (
+                          <Select.Item key={type.id} value={type.id}>
+                            {`${type.icon} ${type.name}`}
+                          </Select.Item>
+                        ))}
+                      </Select.Content>
+                    </Select.Root>
                     <input
                       type="text"
                       value={JSON.stringify(action.payload)}

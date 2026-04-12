@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import * as Select from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   isTauri,
@@ -118,6 +119,11 @@ const VIBE_DETAIL_LEVEL_OPTIONS: Array<{
   { value: "Balanced", label: "Balanced" },
   { value: "Detailed", label: "Detailed" },
 ];
+
+type SettingsSelectOption = {
+  value: string;
+  label: string;
+};
 
 const DEFAULT_VIBE_CONFIG: VibeCodingConfig = {
   enabled: false,
@@ -556,34 +562,26 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               label="Source language"
               description={getLanguageLabel(sourceLanguage, true)}
               action={
-                <select
+                <SettingsSelect
                   value={sourceLanguage}
-                  onChange={(e) => void handleSourceLanguageChange(e.target.value)}
-                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover"
-                >
-                  {SOURCE_LANGUAGE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  onValueChange={(value) =>
+                    void handleSourceLanguageChange(value)
+                  }
+                  options={SOURCE_LANGUAGE_OPTIONS}
+                />
               }
             />
             <SettingsRow
               label="Target language"
               description={getLanguageLabel(targetLanguage)}
               action={
-                <select
+                <SettingsSelect
                   value={targetLanguage}
-                  onChange={(e) => void handleTargetLanguageChange(e.target.value)}
-                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover"
-                >
-                  {TARGET_LANGUAGE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  onValueChange={(value) =>
+                    void handleTargetLanguageChange(value)
+                  }
+                  options={TARGET_LANGUAGE_OPTIONS}
+                />
               }
             />
             <SettingsRow
@@ -682,18 +680,17 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               label="Activation mode"
               description={getVibeActivationDescription(vibeConfig.activation_mode)}
               action={
-                <select
+                <SettingsSelect
                   value={vibeConfig.activation_mode}
-                  onChange={(e) => void applyVibeConfig({ activation_mode: e.target.value as VibeCodingConfig["activation_mode"] })}
+                  onValueChange={(value) =>
+                    void applyVibeConfig({
+                      activation_mode:
+                        value as VibeCodingConfig["activation_mode"],
+                    })
+                  }
                   disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
-                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
-                >
-                  {VIBE_ACTIVATION_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  options={VIBE_ACTIVATION_OPTIONS}
+                />
               }
             />
             <SettingsRow
@@ -714,36 +711,32 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               label="Target AI tool"
               description="Tune wording for your primary coding assistant."
               action={
-                <select
+                <SettingsSelect
                   value={vibeConfig.target_tool}
-                  onChange={(e) => void applyVibeConfig({ target_tool: e.target.value as VibeCodingConfig["target_tool"] })}
+                  onValueChange={(value) =>
+                    void applyVibeConfig({
+                      target_tool: value as VibeCodingConfig["target_tool"],
+                    })
+                  }
                   disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
-                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
-                >
-                  {VIBE_TARGET_TOOL_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  options={VIBE_TARGET_TOOL_OPTIONS}
+                />
               }
             />
             <SettingsRow
               label="Prompt detail level"
               description="Control how concise or detailed rewritten prompts should be."
               action={
-                <select
+                <SettingsSelect
                   value={vibeConfig.detail_level}
-                  onChange={(e) => void applyVibeConfig({ detail_level: e.target.value as VibeCodingConfig["detail_level"] })}
+                  onValueChange={(value) =>
+                    void applyVibeConfig({
+                      detail_level: value as VibeCodingConfig["detail_level"],
+                    })
+                  }
                   disabled={!vibeConfig.enabled || vibeSaving || vibeLoading}
-                  className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
-                >
-                  {VIBE_DETAIL_LEVEL_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  options={VIBE_DETAIL_LEVEL_OPTIONS}
+                />
               }
             />
             <SettingsRow
@@ -907,6 +900,41 @@ function SettingsRow({
       </div>
       {action}
     </div>
+  );
+}
+
+function SettingsSelect({
+  value,
+  onValueChange,
+  options,
+  disabled,
+  className,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  options: ReadonlyArray<SettingsSelectOption>;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <Select.Root
+      value={value}
+      onValueChange={onValueChange}
+      disabled={disabled}
+      size="small"
+      variant="compact"
+    >
+      <Select.Trigger className={cn("min-w-[180px] bg-card", className)}>
+        <Select.Value />
+      </Select.Trigger>
+      <Select.Content>
+        {options.map((option) => (
+          <Select.Item key={option.value} value={option.value}>
+            {option.label}
+          </Select.Item>
+        ))}
+      </Select.Content>
+    </Select.Root>
   );
 }
 
