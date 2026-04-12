@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { GreetingCard } from "./GreetingCard";
 import { FeatureTip } from "./FeatureTip";
 import { ActivityTable } from "./ActivityTable";
-import { isTauri, getConversation } from "@/lib/tauri";
+import { isTauri, getConversation, getTriggerHotkey } from "@/lib/tauri";
+import { useSettings } from "@/context/SettingsContext";
 
 interface DashboardStats {
   totalWords: number;
@@ -53,7 +54,9 @@ function calculateStats(messages: Array<{ role: string; content: string; timesta
 }
 
 export function DashboardContent() {
+  const { settings, updateSettings } = useSettings();
   const [stats, setStats] = useState<DashboardStats>({ totalWords: 0, todayWords: 0, streak: 0 });
+  const displayHotkey = settings.hotkey || "Ctrl+Space";
   
   useEffect(() => {
     if (!isTauri()) return;
@@ -72,24 +75,40 @@ export function DashboardContent() {
     const interval = setInterval(loadStats, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    getTriggerHotkey()
+      .then((hotkey) => {
+        if (hotkey && hotkey !== settings.hotkey) {
+          void updateSettings({ hotkey });
+        }
+      })
+      .catch((err) => console.error("Failed to get current hotkey:", err));
+  }, [settings.hotkey, updateSettings]);
   
   return (
-    <div className="space-y-8">
-      {/* Greeting & Stats */}
+    <div className="space-y-8 pb-8">
       <GreetingCard
         streak={stats.streak}
         totalWords={stats.totalWords}
         todayWords={stats.todayWords}
       />
 
-      {/* Feature Tip */}
       <FeatureTip
-        title="Hold Ctrl+Space to dictate and let ListenOS format for you"
-        description="Press and hold Ctrl+Space to dictate in any app. ListenOS's Smart Formatting and Backtrack will handle punctuation, new lines, lists, and adjust when you change your mind mid-sentence."
+        title={`Hold ${displayHotkey} to dictate in any app`}
+        description="Smart Formatting and Backtrack keep punctuation, spacing, lists, and rewritten phrases clean while you keep talking."
       />
 
-      {/* Activity Table */}
-      <ActivityTable />
+      <section className="animate-slide-in space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted">Recent Activity</h2>
+            <p className="mt-1 text-sm text-muted">Click any row to copy dictation instantly.</p>
+          </div>
+        </div>
+        <ActivityTable />
+      </section>
     </div>
   );
 }

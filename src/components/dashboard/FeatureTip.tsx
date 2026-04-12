@@ -10,22 +10,28 @@ interface FeatureTipProps {
 export function FeatureTip({
   title,
   description,
-  actionLabel = "Show me how",
+  actionLabel = "Open guide",
   onAction,
 }: FeatureTipProps) {
   return (
-    <div className="rounded-xl bg-card-feature p-6">
-      <h2 className="mb-2 text-xl font-semibold text-foreground">{title}</h2>
-      <p className="mb-4 text-sm text-muted">{description}</p>
-      {actionLabel && (
-        <button
-          onClick={onAction}
-          className="rounded-lg bg-foreground px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-foreground/90"
-        >
-          {actionLabel}
-        </button>
-      )}
-    </div>
+    <section className="animate-fade-in ui-surface-panel rounded-2xl p-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="max-w-3xl">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">Workflow Tip</p>
+          <h2 className="mt-2 text-xl font-semibold text-foreground">{title}</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted">{description}</p>
+        </div>
+
+        {actionLabel && (
+          <button
+            onClick={onAction}
+            className="inline-flex items-center justify-center rounded-lg border border-border bg-primary px-4 py-2.5 text-sm font-semibold text-background transition-opacity hover:opacity-85"
+          >
+            {actionLabel}
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 

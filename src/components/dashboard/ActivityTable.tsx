@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { isTauri, getConversation, type ConversationMessage } from "@/lib/tauri";
 import { useToast } from "@/context/ToastContext";
+import { cn } from "@/lib/utils";
 
 export function ActivityTable() {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -12,18 +13,17 @@ export function ActivityTable() {
   useEffect(() => {
     if (isTauri()) {
       loadMessages();
-      // Refresh every 2 seconds to catch new messages
       const interval = setInterval(loadMessages, 2000);
       return () => clearInterval(interval);
-    } else {
-      setIsLoading(false);
     }
+
+    setIsLoading(false);
   }, []);
 
   const loadMessages = async () => {
     try {
       const msgs = await getConversation();
-      setMessages(msgs.filter(m => m.role === "User"));
+      setMessages(msgs.filter((message) => message.role === "User"));
     } catch (error) {
       console.error("Failed to load messages:", error);
     } finally {
@@ -42,8 +42,10 @@ export function ActivityTable() {
 
   const formatTime = (timestamp: string) => {
     try {
-      return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch { return ""; }
+      return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return "";
+    }
   };
 
   const formatDate = (timestamp: string) => {
@@ -52,13 +54,21 @@ export function ActivityTable() {
       const today = new Date();
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
-      if (date.toDateString() === today.toDateString()) return "TODAY";
-      if (date.toDateString() === yesterday.toDateString()) return "YESTERDAY";
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase();
-    } catch { return ""; }
+
+      if (date.toDateString() === today.toDateString()) {
+        return "Today";
+      }
+
+      if (date.toDateString() === yesterday.toDateString()) {
+        return "Yesterday";
+      }
+
+      return date.toLocaleDateString([], { month: "short", day: "numeric" });
+    } catch {
+      return "";
+    }
   };
 
-  // Group messages by date
   const groupedMessages = messages.reduce((groups, msg) => {
     const dateKey = formatDate(msg.timestamp);
     if (!groups[dateKey]) groups[dateKey] = [];
@@ -68,47 +78,46 @@ export function ActivityTable() {
 
   if (isLoading) {
     return (
-      <div className="rounded-lg border border-border bg-card p-8 text-center">
-        <div className="h-6 w-6 mx-auto animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <div className="animate-fade-in ui-surface-panel rounded-2xl p-10 text-center">
+        <div className="mx-auto h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <p className="mt-3 text-sm text-muted">Loading activity</p>
       </div>
     );
   }
 
   if (messages.length === 0) {
     return (
-      <div className="rounded-lg border border-border bg-card p-8 text-center">
-        <p className="text-muted">No activity yet. Start speaking to see your transcriptions here.</p>
+      <div className="animate-fade-in ui-surface-panel rounded-2xl p-10 text-center">
+        <p className="text-sm text-muted">No activity yet. Start dictating to populate this feed.</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      {Object.entries(groupedMessages).map(([dateKey, msgs]) => (
-        <div key={dateKey}>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">
-            {dateKey}
-          </h3>
-          <div className="rounded-lg border border-border bg-card overflow-hidden">
-            {msgs.map((msg, idx) => (
-              <div
-                key={msg.id}
-                onClick={() => handleCopy(msg.content)}
-                className={`flex gap-6 px-5 py-3 cursor-pointer transition-colors hover:bg-sidebar-hover ${
-                  idx !== msgs.length - 1 ? "border-b border-border" : ""
-                }`}
+    <div className="space-y-5">
+      {Object.entries(groupedMessages).map(([dateKey, groupMessages]) => (
+        <section key={dateKey} className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{dateKey}</h3>
+          <div className="animate-fade-in ui-surface-panel overflow-hidden rounded-2xl">
+            {groupMessages.map((message, index) => (
+              <button
+                key={message.id}
+                onClick={() => handleCopy(message.content)}
+                className={cn(
+                  "ui-hover-surface flex w-full items-start gap-5 px-5 py-3 text-left",
+                  index !== groupMessages.length - 1 && "border-b border-border"
+                )}
                 title="Click to copy"
               >
-                <span className="w-20 shrink-0 text-sm text-muted">
-                  {formatTime(msg.timestamp)}
+                <span className="mt-0.5 w-16 shrink-0 text-xs font-medium uppercase tracking-[0.1em] text-muted">
+                  {formatTime(message.timestamp)}
                 </span>
-                <p className="text-sm text-foreground">{msg.content}</p>
-              </div>
+                <p className="text-sm leading-relaxed text-foreground">{message.content}</p>
+              </button>
             ))}
           </div>
-        </div>
+        </section>
       ))}
     </div>
   );
 }
-
