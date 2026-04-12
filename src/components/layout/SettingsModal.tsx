@@ -18,7 +18,7 @@ import {
 } from "@/lib/tauri";
 import type { VibeCodingConfig } from "@/lib/tauri";
 import { checkForUpdates } from "@/lib/updater";
-import { useAuth } from "@/context/AuthContext";
+import { useSettings } from "@/context/SettingsContext";
 import packageInfo from "../../../package.json";
 import {
   Settings02Icon,
@@ -253,19 +253,19 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
   const [currentShortcut, setCurrentShortcut] = useState("Ctrl+Space");
-  const { user, settings, updateSettings } = useAuth();
+  const { settings, updateSettings } = useSettings();
 
   // Local state for system settings
-  const [startOnLogin, setStartOnLogin] = useState(settings?.startOnLogin ?? false);
-  const [showInTray, setShowInTray] = useState(settings?.showInTray ?? true);
+  const [startOnLogin, setStartOnLogin] = useState(settings.startOnLogin ?? false);
+  const [showInTray, setShowInTray] = useState(settings.showInTray ?? true);
   const [sourceLanguage, setSourceLanguage] = useState("en");
-  const [targetLanguage, setTargetLanguage] = useState(settings?.language ?? "en");
+  const [targetLanguage, setTargetLanguage] = useState(settings.language ?? "en");
   const [autostartLoading, setAutostartLoading] = useState(false);
   const [vibeConfig, setVibeConfigState] = useState<VibeCodingConfig>(DEFAULT_VIBE_CONFIG);
   const [vibeSaving, setVibeSaving] = useState(false);
   const [vibeLoading, setVibeLoading] = useState(false);
   const [useRemoteApi, setUseRemoteApi] = useState(false);
-  const [groqApiKey, setGroqApiKey] = useState("");
+  const [deepgramApiKey, setDeepgramApiKey] = useState("");
   const [apiSettingsLoading, setApiSettingsLoading] = useState(false);
   const [apiSettingsSaving, setApiSettingsSaving] = useState(false);
 
@@ -300,7 +300,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       getLocalApiSettings()
         .then((localApi) => {
           setUseRemoteApi(localApi.use_remote_api);
-          setGroqApiKey(localApi.groq_api_key ?? "");
+          setDeepgramApiKey(localApi.deepgram_api_key ?? "");
         })
         .catch((err) => {
           console.error("Failed to load local API settings:", err);
@@ -312,14 +312,12 @@ function SettingsContent({ section }: { section: SettingsSection }) {
 
   // Update local state when settings change
   useEffect(() => {
-    if (settings) {
-      setShowInTray(settings.showInTray);
-      if (!isTauri()) {
-        setTargetLanguage(settings.language);
-      }
-      if (settings.hotkey) {
-        setCurrentShortcut(settings.hotkey);
-      }
+    setShowInTray(settings.showInTray);
+    if (!isTauri()) {
+      setTargetLanguage(settings.language);
+    }
+    if (settings.hotkey) {
+      setCurrentShortcut(settings.hotkey);
     }
   }, [settings]);
 
@@ -377,9 +375,9 @@ function SettingsContent({ section }: { section: SettingsSection }) {
 
     setApiSettingsSaving(true);
     try {
-      const saved = await setLocalApiSettings(checked, groqApiKey);
+      const saved = await setLocalApiSettings(checked, deepgramApiKey);
       setUseRemoteApi(saved.use_remote_api);
-      setGroqApiKey(saved.groq_api_key ?? "");
+      setDeepgramApiKey(saved.deepgram_api_key ?? "");
       setUpdateStatus(saved.use_remote_api
         ? "Cloud routing enabled"
         : "Local routing enabled");
@@ -390,26 +388,26 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     } finally {
       setApiSettingsSaving(false);
     }
-  }, [groqApiKey]);
+  }, [deepgramApiKey]);
 
-  const handleGroqApiKeySave = useCallback(async () => {
+  const handleDeepgramApiKeySave = useCallback(async () => {
     if (!isTauri()) {
       return;
     }
 
     setApiSettingsSaving(true);
     try {
-      const saved = await setLocalApiSettings(useRemoteApi, groqApiKey);
+      const saved = await setLocalApiSettings(useRemoteApi, deepgramApiKey);
       setUseRemoteApi(saved.use_remote_api);
-      setGroqApiKey(saved.groq_api_key ?? "");
-      setUpdateStatus("Groq API key saved locally");
+      setDeepgramApiKey(saved.deepgram_api_key ?? "");
+      setUpdateStatus("Deepgram API key saved locally");
     } catch (err) {
-      console.error("Failed to save Groq API key:", err);
-      setUpdateStatus("Failed to save Groq API key");
+      console.error("Failed to save Deepgram API key:", err);
+      setUpdateStatus("Failed to save Deepgram API key");
     } finally {
       setApiSettingsSaving(false);
     }
-  }, [groqApiKey, useRemoteApi]);
+  }, [deepgramApiKey, useRemoteApi]);
 
   const handleSourceLanguageChange = useCallback(async (newLanguage: string) => {
     const previousSource = sourceLanguage;
@@ -666,7 +664,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               description={
                 useRemoteApi
                   ? "Voice intent routes through ListenOS server API."
-                  : "Voice intent runs locally via direct Groq API."
+                  : "Voice intent runs locally via direct Deepgram API."
               }
               action={
                 <ToggleSwitch
@@ -677,20 +675,20 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               }
             />
             <SettingsRow
-              label="Groq API key"
-              description={groqApiKey.trim().length > 0 ? "Your key is saved on this device." : "Required for fully local mode."}
+              label="Deepgram API key"
+              description={deepgramApiKey.trim().length > 0 ? "Your key is saved on this device." : "Required for fully local mode."}
               action={
                 <div className="flex items-center gap-2">
                   <input
                     type="password"
-                    value={groqApiKey}
-                    onChange={(e) => setGroqApiKey(e.target.value)}
+                    value={deepgramApiKey}
+                    onChange={(e) => setDeepgramApiKey(e.target.value)}
                     disabled={apiSettingsLoading || apiSettingsSaving}
-                    placeholder="gsk_..."
+                    placeholder="dg_..."
                     className="w-56 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors disabled:opacity-50"
                   />
                   <button
-                    onClick={() => void handleGroqApiKeySave()}
+                    onClick={() => void handleDeepgramApiKeySave()}
                     disabled={apiSettingsLoading || apiSettingsSaving}
                     className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
                   >
@@ -864,12 +862,12 @@ function SettingsContent({ section }: { section: SettingsSection }) {
           <div className="space-y-6">
             <SettingsRow
               label="Mode"
-              description="Self-hosted local mode. Login is disabled."
+              description="Self-hosted local mode. No sign-in required."
               action={<span className="text-sm text-green-600">Local only</span>}
             />
             <SettingsRow
               label="Profile"
-              description={user?.email || "selfhosted@local"}
+              description="Local user"
               action={<span className="text-sm text-muted">Stored on this device</span>}
             />
           </div>

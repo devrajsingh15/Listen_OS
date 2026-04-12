@@ -4,7 +4,6 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/tauri";
-import { useAuth } from "@/context/AuthContext";
 import {
   Home03Icon,
   Book02Icon,
@@ -178,18 +177,14 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
 }
 
 function UserAccountSection() {
-  const { user } = useAuth();
-
   return (
     <div className="flex items-center gap-3 rounded-lg px-3 py-2">
       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white text-sm font-medium">
-        {user?.firstName?.[0] || user?.email?.[0]?.toUpperCase() || "L"}
+        L
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate">
-          {user?.firstName ? `${user.firstName} ${user.lastName || ""}`.trim() : "Local user"}
-        </p>
-        <p className="text-xs text-muted truncate">{user?.email || "selfhosted@local"}</p>
+        <p className="text-sm font-medium text-foreground truncate">Local user</p>
+        <p className="text-xs text-muted truncate">Self-hosted</p>
       </div>
       <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-500">
         Local

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Theme } from "@radix-ui/themes";
-import { AuthProvider } from "@/context/AuthContext";
+import { SettingsProvider } from "@/context/SettingsContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { ErrorNotification } from "@/components/ErrorNotification";
 import "../globals.css";
@@ -25,14 +25,14 @@ export default function RootLayout({
   return (
     <html lang="en" className={inter.variable}>
       <body className="antialiased">
-        <AuthProvider>
+        <SettingsProvider>
           <ToastProvider>
             <Theme accentColor="violet" grayColor="slate" radius="medium">
               {children}
               <ErrorNotification />
             </Theme>
           </ToastProvider>
-        </AuthProvider>
+        </SettingsProvider>
       </body>
     </html>
   );

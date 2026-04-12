@@ -113,7 +113,7 @@ export async function startListening(): Promise<boolean> {
   return invoke("start_listening");
 }
 
-// Stop listening - processes audio with Groq Whisper, executes action, returns result
+// Stop listening - processes audio with Deepgram ASR, executes action, returns result
 export async function stopListening(dictationOnly = false): Promise<VoiceProcessingResult> {
   return invoke("stop_listening", {
     dictationOnly,
@@ -192,7 +192,7 @@ export async function setVibeCodingConfig(
 
 export interface LocalApiSettings {
   use_remote_api: boolean;
-  groq_api_key: string;
+  deepgram_api_key: string;
 }
 
 export async function getLocalApiSettings(): Promise<LocalApiSettings> {
@@ -201,13 +201,13 @@ export async function getLocalApiSettings(): Promise<LocalApiSettings> {
 
 export async function setLocalApiSettings(
   useRemoteApi: boolean,
-  groqApiKey: string,
+  deepgramApiKey: string,
 ): Promise<LocalApiSettings> {
   return invoke("set_local_api_settings", {
     useRemoteApi,
-    groqApiKey,
+    deepgramApiKey,
     use_remote_api: useRemoteApi,
-    groq_api_key: groqApiKey,
+    deepgram_api_key: deepgramApiKey,
   });
 }
 
