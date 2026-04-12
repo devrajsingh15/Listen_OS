@@ -36,6 +36,8 @@ struct RuntimeMetrics {
     restart_count: u32,
     last_error: Option<String>,
     last_callback_ms: Option<u64>,
+    phase_changed_ms: u64,
+    sample_rate_hz: u32,
 }
 
 impl Default for RuntimeMetrics {
@@ -46,6 +48,8 @@ impl Default for RuntimeMetrics {
             restart_count: 0,
             last_error: None,
             last_callback_ms: None,
+            phase_changed_ms: now_millis(),
+            sample_rate_hz: SAMPLE_RATE,
         }
     }
 }
@@ -253,6 +257,9 @@ impl AudioStreamer {
             .map_err(|e| format!("Failed to get default input config: {}", e))?;
 
         log::info!("Default config: {:?}", supported_config);
+        if let Ok(mut runtime) = self.runtime.lock() {
+            runtime.sample_rate_hz = supported_config.sample_rate().0;
+        }
 
         let is_rec = is_recording.clone();
         let acc = accumulated.clone();
@@ -279,6 +286,7 @@ impl AudioStreamer {
                         if let Ok(mut runtime) = err_runtime.lock() {
                             runtime.phase = AudioHealthPhase::Error;
                             runtime.last_error = Some(err.to_string());
+                            runtime.phase_changed_ms = now_millis();
                         }
                     },
                     None,
@@ -303,6 +311,7 @@ impl AudioStreamer {
                         if let Ok(mut runtime) = err_runtime.lock() {
                             runtime.phase = AudioHealthPhase::Error;
                             runtime.last_error = Some(err.to_string());
+                            runtime.phase_changed_ms = now_millis();
                         }
                     },
                     None,
@@ -329,6 +338,7 @@ impl AudioStreamer {
                         if let Ok(mut runtime) = err_runtime.lock() {
                             runtime.phase = AudioHealthPhase::Error;
                             runtime.last_error = Some(err.to_string());
+                            runtime.phase_changed_ms = now_millis();
                         }
                     },
                     None,
@@ -378,12 +388,14 @@ impl AudioStreamer {
         self.live_level_bits
             .store(0.0_f32.to_bits(), Ordering::Relaxed);
 
-        // Drop the stream handle to stop recording
-        if let Ok(mut handle) = self.stream_handle.lock() {
-            if let Some(active) = handle.take() {
-                let _ = active.stream.pause();
-            }
-        }
+        // Dropping the input stream releases the capture handle more reliably than
+        // pausing first on some Windows audio stacks.
+        let active_stream = self
+            .stream_handle
+            .lock()
+            .ok()
+            .and_then(|mut handle| handle.take());
+        drop(active_stream);
 
         self.update_runtime(AudioHealthPhase::Idle, None, None, false);
 
@@ -439,17 +451,36 @@ impl AudioStreamer {
             })
     }
 
-    pub fn should_restart(&self, stall_after: Duration) -> bool {
+    pub fn current_sample_rate(&self) -> u32 {
+        self.runtime
+            .lock()
+            .map(|runtime| runtime.sample_rate_hz)
+            .unwrap_or(SAMPLE_RATE)
+    }
+
+    pub fn should_restart(&self, healthy_stall_after: Duration, startup_timeout: Duration) -> bool {
         if !self.is_streaming() {
             return false;
         }
 
-        let status = self.snapshot_runtime_status();
-        matches!(status.phase, AudioHealthPhase::Healthy)
-            && status
-                .last_callback_age_ms
-                .map(|age| age > stall_after.as_millis() as u64)
-                .unwrap_or(false)
+        let now = now_millis();
+        self.runtime
+            .lock()
+            .map(|runtime| {
+                let callback_age = runtime.last_callback_ms.map(|ts| now.saturating_sub(ts));
+                let phase_age = now.saturating_sub(runtime.phase_changed_ms);
+                match runtime.phase {
+                    AudioHealthPhase::Healthy => callback_age
+                        .map(|age| age > healthy_stall_after.as_millis() as u64)
+                        .unwrap_or(phase_age > startup_timeout.as_millis() as u64),
+                    AudioHealthPhase::Starting | AudioHealthPhase::Recovering => {
+                        phase_age > startup_timeout.as_millis() as u64
+                    }
+                    AudioHealthPhase::Error => true,
+                    AudioHealthPhase::Idle => false,
+                }
+            })
+            .unwrap_or(false)
     }
 
     pub fn mark_recovering(&self, reason: impl Into<String>) {
@@ -478,6 +509,7 @@ impl AudioStreamer {
                 runtime.device_name = Some(device_name);
             }
             runtime.last_error = last_error;
+            runtime.phase_changed_ms = now_millis();
             if increment_restart_count {
                 runtime.restart_count = runtime.restart_count.saturating_add(1);
             }
@@ -585,6 +617,10 @@ impl AudioAccumulator {
     /// Clear the accumulator
     pub fn clear(&mut self) {
         self.samples.clear();
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.sample_rate = sample_rate.max(1);
     }
 
     /// Get sample rate

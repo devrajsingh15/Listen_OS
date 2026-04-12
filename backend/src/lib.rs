@@ -468,9 +468,18 @@ pub fn run() {
                         continue;
                     }
 
-                    let needs_restart = {
+                    let (needs_restart, restart_count, phase, last_error) = {
                         let streamer = streamer.lock().await;
-                        streamer.should_restart(tokio::time::Duration::from_millis(1800))
+                        let status = streamer.snapshot_runtime_status();
+                        (
+                            streamer.should_restart(
+                                tokio::time::Duration::from_millis(1800),
+                                tokio::time::Duration::from_millis(2500),
+                            ),
+                            status.restart_count,
+                            status.phase,
+                            status.last_error.clone(),
+                        )
                     };
 
                     if !needs_restart {
@@ -479,18 +488,40 @@ pub fn run() {
 
                     let preferred_device = {
                         let audio = audio.lock().await;
-                        audio.selected_device.clone()
+                        if restart_count >= 2 {
+                            None
+                        } else {
+                            audio.selected_device.clone()
+                        }
+                    };
+                    let forced_fallback_device = restart_count >= 2 && preferred_device.is_none();
+                    let recovery_reason = if matches!(phase, AudioHealthPhase::Error) {
+                        format!(
+                            "Audio capture errored{}{} Restarting microphone stream.",
+                            if restart_count >= 2 {
+                                " repeatedly."
+                            } else {
+                                "."
+                            },
+                            last_error
+                                .as_ref()
+                                .map(|err| format!(" Last error: {}", err))
+                                .unwrap_or_default()
+                        )
+                    } else if forced_fallback_device {
+                        "Audio capture stalled repeatedly. Falling back to automatic microphone selection.".to_string()
+                    } else {
+                        "Audio capture stalled. Restarting microphone stream.".to_string()
                     };
 
                     {
                         let streamer = streamer.lock().await;
                         streamer.stop_streaming();
-                        streamer.mark_recovering(
-                            "Audio capture stalled. Restarting microphone stream.",
-                        );
+                        streamer.mark_recovering(recovery_reason.clone());
                     }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(160)).await;
 
-                    log::warn!("Audio capture stalled; restarting microphone stream");
+                    log::warn!("{}", recovery_reason);
 
                     let receiver = {
                         let streamer = streamer.lock().await;
@@ -499,6 +530,14 @@ pub fn run() {
 
                     match receiver {
                         Ok(receiver) => {
+                            let sample_rate = {
+                                let streamer = streamer.lock().await;
+                                streamer.current_sample_rate()
+                            };
+                            {
+                                let mut acc = accumulator.lock().await;
+                                acc.set_sample_rate(sample_rate);
+                            }
                             streaming::spawn_audio_receiver_task(
                                 receiver,
                                 accumulator.clone(),

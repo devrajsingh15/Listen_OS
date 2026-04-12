@@ -500,6 +500,7 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
         let streamer = state.streamer.lock().await;
         streamer.stop_streaming();
     }
+    tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
 
     // Clear accumulator
     {
@@ -521,6 +522,14 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
         let streamer = state.streamer.lock().await;
         streamer.start_streaming(preferred_device.as_deref())?
     };
+    let stream_sample_rate = {
+        let streamer = state.streamer.lock().await;
+        streamer.current_sample_rate()
+    };
+    {
+        let mut accumulator = state.accumulator.lock().await;
+        accumulator.set_sample_rate(stream_sample_rate);
+    }
 
     *is_listening = true;
 
