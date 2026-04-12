@@ -10,6 +10,7 @@ import {
   getPendingAction,
   confirmPendingAction,
   cancelPendingAction,
+  onAssistantShortcut,
   onShortcutPressed,
   onShortcutReleased,
   getAudioLevel,
@@ -263,14 +264,25 @@ export default function AssistantPage() {
     if (!mounted || !isTauri()) return;
     let u1: (() => void) | undefined;
     let u2: (() => void) | undefined;
+    let u3: (() => void) | undefined;
     const setup = async () => {
       try {
         u1 = await onShortcutPressed(() => { if (stateRef.current === "idle") start(false); });
         u2 = await onShortcutReleased(() => { if (stateRef.current === "listening") stop(); });
+        u3 = await onAssistantShortcut(() => {
+          if (stateRef.current === "idle") {
+            start(true);
+            return;
+          }
+
+          if (stateRef.current === "handsfree") {
+            stop();
+          }
+        });
       } catch (e) { console.warn("Setup failed:", e); }
     };
     setup();
-    return () => { u1?.(); u2?.(); };
+    return () => { u1?.(); u2?.(); u3?.(); };
   }, [mounted, start, stop]);
 
   /* ---------------------------------------------------------------- */

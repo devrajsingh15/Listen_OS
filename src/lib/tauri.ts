@@ -175,6 +175,14 @@ export async function setTriggerHotkey(hotkey: string): Promise<string> {
   return invoke("set_trigger_hotkey", { hotkey });
 }
 
+export async function getAssistantHotkey(): Promise<string> {
+  return invoke("get_assistant_hotkey");
+}
+
+export async function setAssistantHotkey(hotkey: string): Promise<string> {
+  return invoke("set_assistant_hotkey", { hotkey });
+}
+
 export interface LanguagePreferences {
   source_language: string;
   target_language: string;
@@ -308,6 +316,12 @@ export function onShortcutPressed(callback: () => void): Promise<UnlistenFn> {
 
 export function onShortcutReleased(callback: () => void): Promise<UnlistenFn> {
   return listen("shortcut-released", () => {
+    callback();
+  });
+}
+
+export function onAssistantShortcut(callback: () => void): Promise<UnlistenFn> {
+  return listen("assistant-shortcut", () => {
     callback();
   });
 }

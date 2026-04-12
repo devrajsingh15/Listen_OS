@@ -6,6 +6,7 @@ const STORAGE_KEY_SETTINGS = "listenos_local_settings";
 
 export interface UserSettings {
   hotkey: string;
+  assistantHotkey: string;
   language: string;
   startOnLogin: boolean;
   showInTray: boolean;
@@ -13,6 +14,7 @@ export interface UserSettings {
 
 const DEFAULT_SETTINGS: UserSettings = {
   hotkey: "Ctrl+Space",
+  assistantHotkey: "Ctrl+Alt+Space",
   language: "en",
   startOnLogin: true,
   showInTray: true,

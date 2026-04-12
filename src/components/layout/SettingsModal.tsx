@@ -6,9 +6,11 @@ import * as Select from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   isTauri,
+  getAssistantHotkey,
   getAutostartEnabled,
   setAutostartEnabled,
   getTriggerHotkey,
+  setAssistantHotkey,
   setTriggerHotkey,
   getLanguagePreferences,
   setLanguagePreferences,
@@ -70,6 +72,7 @@ const settingsNavItems: SettingsNavItem[] = [
 ];
 
 const APP_VERSION = packageInfo.version;
+type ShortcutTarget = "pushToTalk" | "assistant";
 
 const SOURCE_LANGUAGE_OPTIONS = [
   { value: "auto", label: "Auto Detect" },
@@ -257,8 +260,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 function SettingsContent({ section }: { section: SettingsSection }) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
+  const [recordingShortcutTarget, setRecordingShortcutTarget] = useState<ShortcutTarget | null>(
+    null
+  );
   const [currentShortcut, setCurrentShortcut] = useState("Ctrl+Space");
+  const [currentAssistantShortcut, setCurrentAssistantShortcut] = useState("Ctrl+Alt+Space");
   const { settings, updateSettings } = useSettings();
 
   // Local state for system settings
@@ -284,6 +290,10 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       getTriggerHotkey()
         .then((hotkey) => setCurrentShortcut(hotkey))
         .catch((err) => console.error("Failed to get current hotkey:", err));
+
+      getAssistantHotkey()
+        .then((hotkey) => setCurrentAssistantShortcut(hotkey))
+        .catch((err) => console.error("Failed to get assistant hotkey:", err));
 
       getLanguagePreferences()
         .then((prefs) => {
@@ -322,6 +332,9 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     }
     if (settings.hotkey) {
       setCurrentShortcut(settings.hotkey);
+    }
+    if (settings.assistantHotkey) {
+      setCurrentAssistantShortcut(settings.assistantHotkey);
     }
   }, [settings]);
 
@@ -463,20 +476,31 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     }
   }, [vibeConfig]);
 
-  const applyShortcut = useCallback(async (rawShortcut: string) => {
+  const applyShortcut = useCallback(async (target: ShortcutTarget, rawShortcut: string) => {
     if (isTauri()) {
-      const normalized = await setTriggerHotkey(rawShortcut);
-      setCurrentShortcut(normalized);
-      await updateSettings({ hotkey: normalized });
+      if (target === "assistant") {
+        const normalized = await setAssistantHotkey(rawShortcut);
+        setCurrentAssistantShortcut(normalized);
+        await updateSettings({ assistantHotkey: normalized });
+      } else {
+        const normalized = await setTriggerHotkey(rawShortcut);
+        setCurrentShortcut(normalized);
+        await updateSettings({ hotkey: normalized });
+      }
       return;
     }
 
+    if (target === "assistant") {
+      setCurrentAssistantShortcut(rawShortcut);
+      await updateSettings({ assistantHotkey: rawShortcut });
+      return;
+    }
     setCurrentShortcut(rawShortcut);
     await updateSettings({ hotkey: rawShortcut });
   }, [updateSettings]);
 
-  const handleShortcutRecord = useCallback(() => {
-    setIsRecordingShortcut(true);
+  const handleShortcutRecord = useCallback((target: ShortcutTarget) => {
+    setRecordingShortcutTarget(target);
     
     const handleKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
@@ -507,10 +531,10 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       
       if (keys.length >= 2) {
         const shortcut = keys.join('+');
-        setIsRecordingShortcut(false);
+        setRecordingShortcutTarget(null);
         document.removeEventListener('keydown', handleKeyDown);
 
-        void applyShortcut(shortcut).catch((err) => {
+        void applyShortcut(target, shortcut).catch((err) => {
           console.error("Failed to apply shortcut:", err);
           setUpdateStatus("Failed to update shortcut");
         });
@@ -521,7 +545,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     
     // Cancel after 5 seconds
     setTimeout(() => {
-      setIsRecordingShortcut(false);
+      setRecordingShortcutTarget(null);
       document.removeEventListener('keydown', handleKeyDown);
     }, 5000);
   }, [applyShortcut]);
@@ -533,19 +557,44 @@ function SettingsContent({ section }: { section: SettingsSection }) {
           <h2 className="mb-6 text-2xl font-semibold text-foreground">General</h2>
           <div className="space-y-6">
             <SettingsRow
-              label="Keyboard shortcuts"
-              description={isRecordingShortcut ? "Press your shortcut..." : `Hold ${currentShortcut} and speak.`}
+              label="Hold-to-talk shortcut"
+              description={
+                recordingShortcutTarget === "pushToTalk"
+                  ? "Press your shortcut..."
+                  : `Hold ${currentShortcut} and speak.`
+              }
               action={
                 <button 
-                  onClick={handleShortcutRecord}
+                  onClick={() => handleShortcutRecord("pushToTalk")}
                   className={cn(
                     "rounded-lg border px-4 py-2 text-sm font-medium transition-colors cursor-pointer",
-                    isRecordingShortcut 
+                    recordingShortcutTarget === "pushToTalk"
                       ? "border-primary bg-primary/10 text-primary animate-pulse" 
                       : "border-border text-foreground hover:bg-sidebar-hover"
                   )}
                 >
-                  {isRecordingShortcut ? "Recording..." : "Change"}
+                  {recordingShortcutTarget === "pushToTalk" ? "Recording..." : "Change"}
+                </button>
+              }
+            />
+            <SettingsRow
+              label="Assistant mode shortcut"
+              description={
+                recordingShortcutTarget === "assistant"
+                  ? "Press your shortcut..."
+                  : `Press ${currentAssistantShortcut} to toggle idle assistant listening.`
+              }
+              action={
+                <button
+                  onClick={() => handleShortcutRecord("assistant")}
+                  className={cn(
+                    "rounded-lg border px-4 py-2 text-sm font-medium transition-colors cursor-pointer",
+                    recordingShortcutTarget === "assistant"
+                      ? "border-primary bg-primary/10 text-primary animate-pulse"
+                      : "border-border text-foreground hover:bg-sidebar-hover"
+                  )}
+                >
+                  {recordingShortcutTarget === "assistant" ? "Recording..." : "Change"}
                 </button>
               }
             />
@@ -815,7 +864,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
             <SettingsRow
               label="Mode"
               description="Self-hosted local mode. No sign-in required."
-              action={<span className="text-sm text-green-600">Local only</span>}
+              action={<span className="text-sm text-success-text">Local only</span>}
             />
             <SettingsRow
               label="Profile"
@@ -855,13 +904,13 @@ function SettingsContent({ section }: { section: SettingsSection }) {
             <SettingsRow
               label="Voice data"
               description="Voice recordings are processed locally and not stored"
-              action={<span className="text-sm text-green-600">Secure</span>}
+              action={<span className="text-sm text-success-text">Secure</span>}
             />
             <SettingsRow
               label="Command history"
               description="Clear your command history from this device"
               action={
-                <button className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100">
+                <button className="rounded-lg border border-danger-border bg-danger-surface px-4 py-2 text-sm font-medium text-danger transition-colors hover:opacity-85">
                   Clear history
                 </button>
               }
@@ -870,7 +919,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               label="Delete local data"
               description="Clear local ListenOS data on this device"
               action={
-                <button className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-100">
+                <button className="rounded-lg border border-danger-border bg-danger-surface px-4 py-2 text-sm font-medium text-danger transition-colors hover:opacity-85">
                   Clear local data
                 </button>
               }
@@ -957,12 +1006,12 @@ function ToggleSwitch({
         disabled && "opacity-50 cursor-not-allowed"
       )}
     >
-      <span
-        className={cn(
-          "absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform",
-          checked && "translate-x-5"
-        )}
-      />
+        <span
+          className={cn(
+            "absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-background shadow transition-transform",
+            checked && "translate-x-5"
+          )}
+        />
     </button>
   );
 }
