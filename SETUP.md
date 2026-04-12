@@ -1,27 +1,41 @@
 # ListenOS Setup
 
-This project is desktop-first and local-first.
+ListenOS is desktop-first and local-first.
 
-- No cloud auth
+- No cloud auth/login gate
 - No external server process
 - No cloud database
-- Tauri + Next.js UI + Rust backend in one app
+- Tauri + Next.js + Rust backend in one app
 
 ## Prerequisites
 
 - Node.js 20+
 - Rust stable toolchain
-- Platform toolchain for Tauri builds
+- Tauri platform toolchain
+
+Windows extras:
+- Visual Studio Build Tools with C++ workload
+
+macOS extras:
+- Xcode Command Line Tools (`xcode-select --install`)
 
 ## Install
 
 ```bash
 npm install
+# or
+bun install
 ```
 
-## Environment
+## Configure API Key
 
-Copy `.env.example` to `.env.local` and set your key:
+Primary path (recommended):
+- Open app
+- Go to `Settings -> System`
+- Set `Groq API key`
+
+Optional env path:
+Copy `.env.example` to `.env.local` and set:
 
 ```env
 GROQ_API_KEY=your_groq_api_key
@@ -32,12 +46,16 @@ LISTENOS_REQUIRE_CONFIRMATION=false
 
 ```bash
 npm run tauri:dev
+# or
+bun run tauri:dev
 ```
 
 ## Build
 
 ```bash
 npm run tauri:build
+# or
+bun run tauri:build
 ```
 
 Platform bundles:
@@ -46,8 +64,16 @@ Platform bundles:
 - macOS DMG: `npm run tauri:build:mac:dmg`
 - Linux AppImage: `npm run tauri:build:linux:appimage`
 
+## Default Shortcuts
+
+- Hold-to-talk: `Ctrl+Space`
+- Assistant mode (idle/handsfree toggle): `Ctrl+Alt+Space`
+
+Both are configurable in `Settings -> General`.
+
 ## Notes
 
-- Settings are stored locally on device.
-- API key settings are stored locally via app settings.
-- Voice processing and action execution run through the desktop runtime.
+- Dashboard opens directly (onboarding disabled).
+- Theme follows device preference automatically.
+- Settings and key storage are local to device.
+- Voice processing and action execution run through desktop runtime.

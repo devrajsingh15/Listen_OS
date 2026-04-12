@@ -18,7 +18,8 @@ ListenOS is proprietary software. Coordinate with maintainers before starting ma
 ## Product Constraints
 
 - Desktop app is self-hosted first: do not reintroduce login-gated dashboard flows.
-- Onboarding must require a Groq API key for local processing.
+- Dashboard should open directly into platform UI. Do not reintroduce blocking onboarding gates.
+- Groq key configuration should remain available in `Settings -> System`.
 - Voice flow should execute and transcribe without spoken voice playback.
 - Avoid Bluetooth hands-free microphone routing that can hijack headphone output.
 

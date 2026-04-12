@@ -10,24 +10,36 @@ Use this checklist on a real macOS machine after installing from the generated D
    - Dashboard window
    - Assistant overlay chip
 
+4. Confirm app opens directly (no blocking onboarding modal).
+
 ## Permissions
 
 1. Grant **Microphone** permission.
 2. Grant **Accessibility** permission (for keyboard/mouse automation).
 3. Confirm the app works after permissions are granted without restart loops.
 
-## Core Voice Flow
+## Shortcut Flows
 
-1. Press and hold the configured hotkey.
-2. Speak a short dictation sentence.
-3. Release the hotkey and confirm text is typed into the focused input.
-4. Speak a command (example: "open x.com") and confirm execution.
+1. Verify hold-to-talk default: `Ctrl+Space`.
+2. Hold `Ctrl+Space`, speak a short dictation sentence, release, and confirm text is typed.
+3. Verify assistant mode default: `Ctrl+Alt+Space`.
+4. Press `Ctrl+Alt+Space` once to start handsfree mode.
+5. Speak and confirm dictation/command behavior.
+6. Press `Ctrl+Alt+Space` again and confirm handsfree mode stops.
+7. Change both shortcuts in `Settings -> General`, then re-test both paths.
 
-## Voice Reply / TTS
+## Dashboard and Tools
 
-1. Ask a question that routes to assistant response.
-2. Confirm spoken reply is audible.
-3. Confirm fallback voice works when ElevenLabs is unavailable.
+1. Open each dashboard page and verify it renders:
+   - Conversation
+   - Commands
+   - Clipboard
+   - Integrations
+   - Dictionary
+   - Snippets
+   - Tone
+2. Confirm notes page is not present in sidebar navigation.
+3. Open `Settings` and verify System section can save Groq API key.
 
 ## Files and System Actions
 
@@ -41,6 +53,13 @@ Use this checklist on a real macOS machine after installing from the generated D
 1. Confirm overlay remains centered and visible.
 2. Confirm listening/processing states are visible in the chip.
 3. Confirm voice waveform reacts while speaking.
+
+## Theme and Visibility
+
+1. Switch macOS appearance Light/Dark and relaunch app if needed.
+2. Confirm dashboard follows system theme automatically.
+3. Confirm text contrast is readable in both themes (no invisible text).
+4. Confirm borders/dividers are visible and consistent across dashboard surfaces.
 
 ## Stability
 
