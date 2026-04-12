@@ -8,7 +8,7 @@ ListenOS is a local-first Tauri app with a Next.js dashboard and a Rust backend.
 
 ## Current Product Behavior
 
-- Desktop app opens directly to platform UI. Onboarding flow is disabled.
+- On first launch, onboarding runs to set API key, microphone, and starter templates.
 - Default hold-to-talk shortcut: `Ctrl+Space`
 - Default assistant-mode shortcut: `Ctrl+Alt+Space`
 - Assistant-mode shortcut toggles idle handsfree listening on/off.

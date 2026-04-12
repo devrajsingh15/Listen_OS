@@ -73,7 +73,7 @@ Both are configurable in `Settings -> General`.
 
 ## Notes
 
-- Dashboard opens directly (onboarding disabled).
+- First launch shows onboarding to configure key/microphone baseline.
 - Theme follows device preference automatically.
 - Settings and key storage are local to device.
 - Voice processing and action execution run through desktop runtime.

@@ -10,7 +10,8 @@ Use this checklist on a real macOS machine after installing from the generated D
    - Dashboard window
    - Assistant overlay chip
 
-4. Confirm app opens directly (no blocking onboarding modal).
+4. Confirm onboarding appears on first launch and can be completed.
+5. Relaunch app and confirm onboarding does not re-open after completion.
 
 ## Permissions
 
