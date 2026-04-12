@@ -10,6 +10,10 @@ pub struct AppConfig {
     /// Hotkey to trigger listening (e.g., "Ctrl+Space")
     pub trigger_hotkey: String,
 
+    /// Hotkey to toggle assistant handsfree listening (e.g., "Ctrl+Alt+Space")
+    #[serde(default = "default_assistant_hotkey")]
+    pub assistant_hotkey: String,
+
     /// Mode: "push_to_talk" or "toggle"
     pub listening_mode: ListeningMode,
 
@@ -242,6 +246,7 @@ impl Default for AppConfig {
 
         Self {
             trigger_hotkey: default_hotkey,
+            assistant_hotkey: default_assistant_hotkey(),
             listening_mode: ListeningMode::PushToTalk,
             auto_copy: true,
             whisper: WhisperConfig::default(),
@@ -318,6 +323,10 @@ impl Default for LocalApiSettings {
             groq_api_key: std::env::var("GROQ_API_KEY").unwrap_or_default(),
         }
     }
+}
+
+fn default_assistant_hotkey() -> String {
+    "Ctrl+Alt+Space".to_string()
 }
 
 /// UI configuration

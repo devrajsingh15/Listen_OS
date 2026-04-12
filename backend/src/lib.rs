@@ -160,21 +160,39 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     let shortcut_str = shortcut.to_string();
+                    let normalized_shortcut =
+                        commands::normalize_hotkey_string(&shortcut_str).unwrap_or(shortcut_str);
+                    let (trigger_hotkey, assistant_hotkey) =
+                        if let Ok(config) = app.state::<AppState>().config.try_lock() {
+                            (config.trigger_hotkey.clone(), config.assistant_hotkey.clone())
+                        } else {
+                            ("Ctrl+Space".to_string(), "Ctrl+Alt+Space".to_string())
+                        };
+
                     log::info!(
                         "Global shortcut event: {} - {:?}",
-                        shortcut_str,
+                        normalized_shortcut,
                         event.state
                     );
 
                     // Emit events to the assistant window (always visible pill)
                     if let Some(assistant) = app.get_webview_window("assistant") {
-                        if event.state == ShortcutState::Pressed {
-                            log::info!("Hotkey pressed - activating assistant");
-                            // Just emit the event, window is always visible
-                            let _ = assistant.emit("shortcut-pressed", ());
-                        } else if event.state == ShortcutState::Released {
-                            log::info!("Ctrl+Space released - processing");
-                            let _ = assistant.emit("shortcut-released", ());
+                        if normalized_shortcut.eq_ignore_ascii_case(&assistant_hotkey) {
+                            if event.state == ShortcutState::Pressed {
+                                log::info!("Assistant shortcut pressed - starting handsfree mode");
+                                let _ = assistant.emit("assistant-shortcut", ());
+                            }
+                            return;
+                        }
+
+                        if normalized_shortcut.eq_ignore_ascii_case(&trigger_hotkey) {
+                            if event.state == ShortcutState::Pressed {
+                                log::info!("Hold-to-talk shortcut pressed");
+                                let _ = assistant.emit("shortcut-pressed", ());
+                            } else if event.state == ShortcutState::Released {
+                                log::info!("Hold-to-talk shortcut released");
+                                let _ = assistant.emit("shortcut-released", ());
+                            }
                         }
                     }
                 })
@@ -233,6 +251,8 @@ pub fn run() {
             commands::set_config,
             commands::get_trigger_hotkey,
             commands::set_trigger_hotkey,
+            commands::get_assistant_hotkey,
+            commands::set_assistant_hotkey,
             commands::get_language_preferences,
             commands::set_language_preferences,
             commands::get_vibe_coding_config,
@@ -293,21 +313,17 @@ pub fn run() {
             learn_correction,
         ])
         .setup(|app| {
-            // Register global shortcut on startup
-            use std::str::FromStr;
-            use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-
+            // Register global shortcuts on startup
             let handle = app.handle().clone();
             tauri::async_runtime::block_on(async {
                 let state = handle.state::<AppState>();
                 let config = state.config.lock().await;
-                let shortcut_str = &config.trigger_hotkey;
-
-                if let Ok(shortcut) = Shortcut::from_str(shortcut_str) {
-                    let _ = handle.global_shortcut().register(shortcut);
-                    log::info!("Registered startup shortcut: {}", shortcut_str);
-                } else {
-                    log::warn!("Failed to parse shortcut: {}", shortcut_str);
+                if let Err(err) = commands::apply_global_hotkeys(
+                    &handle,
+                    &config.trigger_hotkey,
+                    &config.assistant_hotkey,
+                ) {
+                    log::warn!("Failed to register startup shortcuts: {}", err);
                 }
             });
 

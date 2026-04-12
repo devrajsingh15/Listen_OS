@@ -3418,7 +3418,7 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<crate::config::App
     Ok(config.clone())
 }
 
-fn normalize_hotkey_string(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_hotkey_string(raw: &str) -> Result<String, String> {
     let cleaned = raw.trim();
     if cleaned.is_empty() {
         return Err("Hotkey cannot be empty".to_string());
@@ -3476,23 +3476,47 @@ fn normalize_hotkey_string(raw: &str) -> Result<String, String> {
     Ok(parts.join("+"))
 }
 
-fn apply_global_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
+fn validate_distinct_hotkeys(trigger_hotkey: &str, assistant_hotkey: &str) -> Result<(), String> {
+    if trigger_hotkey.eq_ignore_ascii_case(assistant_hotkey) {
+        return Err("Assistant shortcut must be different from hold-to-talk shortcut".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_global_hotkeys(
+    app: &tauri::AppHandle,
+    trigger_hotkey: &str,
+    assistant_hotkey: &str,
+) -> Result<(), String> {
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
-    let normalized = normalize_hotkey_string(hotkey)?;
-    let parsed = Shortcut::from_str(&normalized)
-        .map_err(|_| format!("Invalid hotkey format: '{}'", normalized))?;
+    let normalized_trigger = normalize_hotkey_string(trigger_hotkey)?;
+    let normalized_assistant = normalize_hotkey_string(assistant_hotkey)?;
+    validate_distinct_hotkeys(&normalized_trigger, &normalized_assistant)?;
+
+    let parsed_trigger = Shortcut::from_str(&normalized_trigger)
+        .map_err(|_| format!("Invalid hotkey format: '{}'", normalized_trigger))?;
+    let parsed_assistant = Shortcut::from_str(&normalized_assistant)
+        .map_err(|_| format!("Invalid hotkey format: '{}'", normalized_assistant))?;
 
     app.global_shortcut()
         .unregister_all()
         .map_err(|e| format!("Failed to unregister previous shortcuts: {}", e))?;
 
     app.global_shortcut()
-        .register(parsed)
-        .map_err(|e| format!("Failed to register shortcut '{}': {}", normalized, e))?;
+        .register(parsed_trigger)
+        .map_err(|e| format!("Failed to register shortcut '{}': {}", normalized_trigger, e))?;
 
-    log::info!("Registered global hotkey: {}", normalized);
+    app.global_shortcut()
+        .register(parsed_assistant)
+        .map_err(|e| format!("Failed to register shortcut '{}': {}", normalized_assistant, e))?;
+
+    log::info!(
+        "Registered global hotkeys: hold='{}', assistant='{}'",
+        normalized_trigger,
+        normalized_assistant
+    );
     Ok(())
 }
 
@@ -3504,21 +3528,26 @@ pub async fn set_config(
 ) -> Result<bool, String> {
     let mut config = config;
     config.trigger_hotkey = normalize_hotkey_string(&config.trigger_hotkey)?;
+    config.assistant_hotkey = normalize_hotkey_string(&config.assistant_hotkey)?;
     config.language_preferences = normalized_language_preferences(&config.language_preferences);
     config.vibe_coding = normalized_vibe_coding_config(&config.vibe_coding);
 
     let mut current_config = state.config.lock().await;
 
-    // Check if hotkey changed
-    if current_config.trigger_hotkey != config.trigger_hotkey {
-        let new_shortcut_str = config.trigger_hotkey.clone();
+    if current_config.trigger_hotkey != config.trigger_hotkey
+        || current_config.assistant_hotkey != config.assistant_hotkey
+    {
+        let new_trigger = config.trigger_hotkey.clone();
+        let new_assistant = config.assistant_hotkey.clone();
 
         log::info!(
-            "Updating hotkey from '{}' to '{}'",
+            "Updating hotkeys from hold='{}', assistant='{}' to hold='{}', assistant='{}'",
             current_config.trigger_hotkey,
-            new_shortcut_str
+            current_config.assistant_hotkey,
+            new_trigger,
+            new_assistant
         );
-        apply_global_hotkey(&app, &new_shortcut_str)?;
+        apply_global_hotkeys(&app, &new_trigger, &new_assistant)?;
     }
 
     *current_config = config;
@@ -3543,12 +3572,40 @@ pub async fn set_trigger_hotkey(
     state: State<'_, AppState>,
     hotkey: String,
 ) -> Result<String, String> {
-    let normalized = normalize_hotkey_string(&hotkey)?;
-    apply_global_hotkey(&app, &normalized)?;
+    let normalized_trigger = normalize_hotkey_string(&hotkey)?;
+    let assistant_hotkey = {
+        let config = state.config.lock().await;
+        config.assistant_hotkey.clone()
+    };
+    apply_global_hotkeys(&app, &normalized_trigger, &assistant_hotkey)?;
 
     let mut config = state.config.lock().await;
-    config.trigger_hotkey = normalized.clone();
-    Ok(normalized)
+    config.trigger_hotkey = normalized_trigger.clone();
+    Ok(normalized_trigger)
+}
+
+#[tauri::command]
+pub async fn get_assistant_hotkey(state: State<'_, AppState>) -> Result<String, String> {
+    let config = state.config.lock().await;
+    Ok(config.assistant_hotkey.clone())
+}
+
+#[tauri::command]
+pub async fn set_assistant_hotkey(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    hotkey: String,
+) -> Result<String, String> {
+    let normalized_assistant = normalize_hotkey_string(&hotkey)?;
+    let trigger_hotkey = {
+        let config = state.config.lock().await;
+        config.trigger_hotkey.clone()
+    };
+    apply_global_hotkeys(&app, &trigger_hotkey, &normalized_assistant)?;
+
+    let mut config = state.config.lock().await;
+    config.assistant_hotkey = normalized_assistant.clone();
+    Ok(normalized_assistant)
 }
 
 #[tauri::command]
