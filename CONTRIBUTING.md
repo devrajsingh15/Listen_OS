@@ -18,7 +18,7 @@ ListenOS is proprietary software. Coordinate with maintainers before starting ma
 ## Product Constraints
 
 - Desktop app is self-hosted first: do not reintroduce login-gated dashboard flows.
-- Onboarding must require a Deepgram API key for local processing.
+- Onboarding must require a Groq API key for local processing.
 - Voice flow should execute and transcribe without spoken voice playback.
 - Avoid Bluetooth hands-free microphone routing that can hijack headphone output.
 

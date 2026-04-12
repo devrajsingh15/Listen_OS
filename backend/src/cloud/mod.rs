@@ -1,24 +1,43 @@
 //! Cloud API providers for Listen OS
 
-use serde::{Deserialize, Serialize};
+use reqwest::multipart::{Form, Part};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
 // ============ API KEY HELPERS ============
 // For local/fallback mode only - reads from environment
 
-/// Get the Deepgram API key from environment
-pub fn get_deepgram_key() -> String {
-    if let Ok(value) = std::env::var("DEEPGRAM_API_KEY") {
+/// Get the Groq API key from environment or local settings.
+pub fn get_groq_key() -> String {
+    if let Ok(value) = std::env::var("GROQ_API_KEY") {
         let cleaned = value.trim();
-        if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case("replace_with_deepgram_api_key") {
+        if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case("replace_with_groq_api_key") {
             return cleaned.to_string();
         }
     }
 
     crate::config::LocalApiSettings::load_from_disk()
-        .map(|settings| settings.deepgram_api_key.trim().to_string())
+        .map(|settings| settings.groq_api_key.trim().to_string())
         .filter(|key| !key.is_empty())
         .unwrap_or_default()
+}
+
+fn build_groq_prompt(dictionary_hints: &[String]) -> Option<String> {
+    let hints = dictionary_hints
+        .iter()
+        .map(|hint| hint.trim())
+        .filter(|hint| !hint.is_empty())
+        .take(20)
+        .collect::<Vec<_>>();
+
+    if hints.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Recognize these names or terms if spoken: {}",
+            hints.join(", ")
+        ))
+    }
 }
 
 /// Extract a number from text (for brightness level, volume, etc.)
@@ -80,18 +99,7 @@ fn normalize_web_target(target: &str) -> Option<String> {
 fn is_known_tld(token: &str) -> bool {
     matches!(
         token,
-        "com"
-            | "org"
-            | "net"
-            | "io"
-            | "ai"
-            | "dev"
-            | "app"
-            | "co"
-            | "us"
-            | "in"
-            | "edu"
-            | "gov"
+        "com" | "org" | "net" | "io" | "ai" | "dev" | "app" | "co" | "us" | "in" | "edu" | "gov"
     )
 }
 
@@ -115,11 +123,7 @@ fn infer_web_target_from_phrase(target: &str) -> Option<String> {
         let tld = words[words.len() - 1];
         if is_known_tld(tld) {
             let host = words[..words.len() - 1].join("");
-            if !host.is_empty()
-                && host
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
-            {
+            if !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
                 return Some(format!("https://{}.{}", host, tld));
             }
         }
@@ -163,15 +167,15 @@ fn normalize_spoken_command_text(text: &str) -> String {
 /// Post-process dictation text to clean up common issues
 fn post_process_dictation(text: &str) -> String {
     let mut result = text.to_string();
-    
+
     // Remove multiple consecutive spaces
     while result.contains("  ") {
         result = result.replace("  ", " ");
     }
-    
+
     // Trim leading/trailing whitespace
     result = result.trim().to_string();
-    
+
     // Fix spacing around punctuation
     result = result.replace(" .", ".");
     result = result.replace(" ,", ",");
@@ -179,7 +183,7 @@ fn post_process_dictation(text: &str) -> String {
     result = result.replace(" !", "!");
     result = result.replace(" :", ":");
     result = result.replace(" ;", ";");
-    
+
     // Fix common spoken punctuation that wasn't converted
     result = result.replace(" period", ".");
     result = result.replace(" comma", ",");
@@ -190,7 +194,7 @@ fn post_process_dictation(text: &str) -> String {
     result = result.replace(" semicolon", ";");
     result = result.replace(" new line", "\n");
     result = result.replace(" new paragraph", "\n\n");
-    
+
     // Only remove fillers if they appear at the start of sentences
     // to avoid removing valid uses in the middle
     let filler_starters = ["Um ", "Uh ", "Like ", "So ", "Well "];
@@ -203,14 +207,14 @@ fn post_process_dictation(text: &str) -> String {
             }
         }
     }
-    
+
     // Ensure first letter is capitalized (if it starts with a letter)
     if let Some(first_char) = result.chars().next() {
         if first_char.is_alphabetic() && first_char.is_lowercase() {
             result = first_char.to_uppercase().to_string() + &result[first_char.len_utf8()..];
         }
     }
-    
+
     result
 }
 
@@ -226,8 +230,8 @@ pub struct VoiceContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VoiceMode {
-    Dictation,  // Just transcribe and type
-    Command,    // Parse as command and execute
+    Dictation, // Just transcribe and type
+    Command,   // Parse as command and execute
 }
 
 impl Default for VoiceContext {
@@ -325,30 +329,30 @@ pub enum ActionType {
     SendEmail,
     MultiStep,
     NoAction,
-    
+
     // Conversational actions
-    Respond,          // AI responds conversationally (e.g., answering a question)
-    Clarify,          // AI asks for clarification
-    
+    Respond, // AI responds conversationally (e.g., answering a question)
+    Clarify, // AI asks for clarification
+
     // Clipboard actions
     ClipboardFormat,    // Format clipboard content
     ClipboardTranslate, // Translate clipboard content
     ClipboardSummarize, // Summarize clipboard content
     ClipboardClean,     // Clean up clipboard text
-    
+
     // App integration actions
-    SpotifyControl,     // Control Spotify (play, pause, next, etc.)
-    DiscordControl,     // Control Discord (mute, deafen, etc.)
-    SystemControl,      // System controls (brightness, lock, etc.)
-    
+    SpotifyControl, // Control Spotify (play, pause, next, etc.)
+    DiscordControl, // Control Discord (mute, deafen, etc.)
+    SystemControl,  // System controls (brightness, lock, etc.)
+
     // Custom commands
-    CustomCommand,      // Execute a user-defined custom command
-    
+    CustomCommand, // Execute a user-defined custom command
+
     // Keyboard shortcuts (copy, paste, undo, etc.)
-    KeyboardShortcut,   // Execute a keyboard shortcut
-    
+    KeyboardShortcut, // Execute a keyboard shortcut
+
     // Window management
-    WindowControl,      // Control windows (minimize, maximize, close, etc.)
+    WindowControl, // Control windows (minimize, maximize, close, etc.)
 }
 
 /// Voice client for transcription and local routing
@@ -363,13 +367,13 @@ impl VoiceClient {
         }
     }
 
-    /// Transcribe audio using Deepgram
-    /// 
+    /// Transcribe audio using Groq Whisper.
+    ///
     /// `dictionary_hints` - Optional list of custom words/names to help recognition
     pub async fn transcribe(&self, audio_data: &[u8]) -> Result<TranscriptionResult, String> {
         self.transcribe_with_hints(audio_data, &[], None).await
     }
-    
+
     /// Transcribe audio with custom vocabulary hints
     pub async fn transcribe_with_hints(
         &self,
@@ -379,79 +383,63 @@ impl VoiceClient {
     ) -> Result<TranscriptionResult, String> {
         // Rate limiting disabled for testing
         // crate::rate_limit::check_stt_limit()?;
-        
-        let api_key = get_deepgram_key();
+
+        let api_key = get_groq_key();
         if api_key.is_empty() {
-            return Err("Deepgram API key not found. Check your .env.local file.".to_string());
+            return Err(
+                "Groq API key not found. Set GROQ_API_KEY or save it in Settings.".to_string(),
+            );
         }
 
-        let mut url = reqwest::Url::parse("https://api.deepgram.com/v1/listen")
-            .map_err(|e| format!("Failed to build Deepgram URL: {}", e))?;
+        let file_part = Part::bytes(audio_data.to_vec())
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| format!("Failed to prepare Groq audio upload: {}", e))?;
 
-        {
-            let mut query = url.query_pairs_mut();
-            query.append_pair("model", "nova-3");
-            query.append_pair("smart_format", "true");
-            query.append_pair("punctuate", "true");
+        let mut form = Form::new()
+            .part("file", file_part)
+            .text("model", "whisper-large-v3")
+            .text("response_format", "json")
+            .text("temperature", "0");
 
-            if let Some(lang) = language {
-                let normalized = lang.trim().to_lowercase();
-                if !normalized.is_empty() && normalized != "auto" {
-                    query.append_pair("language", &normalized);
-                }
-            }
-
-            if !dictionary_hints.is_empty() {
-                // Nova-3 uses "keyterm" instead of "keywords"
-                for hint in dictionary_hints.iter().take(50) {
-                    let trimmed = hint.trim();
-                    if !trimmed.is_empty() {
-                        query.append_pair("keyterm", trimmed);
-                    }
-                }
+        if let Some(lang) = language {
+            let normalized = lang.trim().to_lowercase();
+            if !normalized.is_empty() && normalized != "auto" {
+                form = form.text("language", normalized);
             }
         }
 
-        let response = self.client
-            .post(url)
-            .header("Authorization", format!("Token {}", api_key))
-            .header("Content-Type", "audio/wav")
-            .body(audio_data.to_vec())
+        if let Some(prompt) = build_groq_prompt(dictionary_hints) {
+            form = form.text("prompt", prompt);
+        }
+
+        let response = self
+            .client
+            .post("https://api.groq.com/openai/v1/audio/transcriptions")
+            .bearer_auth(api_key)
+            .multipart(form)
             .send()
             .await
-            .map_err(|e| format!("Deepgram API request failed: {}", e))?;
+            .map_err(|e| format!("Groq transcription request failed: {}", e))?;
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Deepgram API error: {}", error_text));
+            return Err(format!("Groq transcription API error: {}", error_text));
         }
 
-        let result: serde_json::Value = response.json().await
-            .map_err(|e| format!("Failed to parse Deepgram response: {}", e))?;
+        #[derive(Deserialize)]
+        struct GroqTranscriptionResponse {
+            text: String,
+        }
 
-        let alternative = result
-            .get("results")
-            .and_then(|r| r.get("channels"))
-            .and_then(|c| c.get(0))
-            .and_then(|c0| c0.get("alternatives"))
-            .and_then(|a| a.get(0))
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-
-        let transcript = alternative
-            .get("transcript")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let confidence = alternative
-            .get("confidence")
-            .and_then(|c| c.as_f64())
-            .unwrap_or(0.0) as f32;
+        let result: GroqTranscriptionResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse Groq transcription response: {}", e))?;
 
         Ok(TranscriptionResult {
-            text: transcript,
-            confidence,
+            text: result.text,
+            confidence: 0.0,
             duration_ms: 0,
             is_final: true,
         })
@@ -460,7 +448,7 @@ impl VoiceClient {
     /// Process text with full conversation context for multi-turn dialogues
     pub async fn process_intent_with_context(
         &self,
-        text: &str, 
+        text: &str,
         _voice_context: &VoiceContext,
         _conv_context: &ConversationContext,
     ) -> Result<ActionResult, String> {
@@ -475,7 +463,7 @@ impl VoiceClient {
     }
 
     /// Detect if the text is a simple command that can be handled locally
-    /// 
+    ///
     /// IMPORTANT: This should only catch UNAMBIGUOUS commands.
     /// When in doubt, let the LLM decide (it can distinguish dictation from commands).
     /// Only detect commands that are:
@@ -486,18 +474,22 @@ impl VoiceClient {
         // Pre-process: clean up transcription artifacts
         let t = normalize_spoken_command_text(text);
         // Remove trailing punctuation
-        let t = t.trim_end_matches('.').trim_end_matches(',').trim_end_matches('!').trim_end_matches('?');
+        let t = t
+            .trim_end_matches('.')
+            .trim_end_matches(',')
+            .trim_end_matches('!')
+            .trim_end_matches('?');
         // Remove leading punctuation that Whisper sometimes adds
         let t = t.trim_start_matches(',').trim_start_matches('.').trim();
         // Normalize multiple spaces and remove commas between words (Whisper artifact)
         let t = t.replace(", ", " ").replace("  ", " ");
-        
+
         // Count words - if extremely long, likely dictation/paragraph
         let word_count = t.split_whitespace().count();
         if word_count > 24 {
             return None; // Too long to be a simple command
         }
-        
+
         let has_negation = t.contains("don't")
             || t.contains("dont")
             || t.contains("do not")
@@ -530,8 +522,17 @@ impl VoiceClient {
                 serde_json::json!({"action": "restart"}),
             ));
         }
-        if t.contains("lock") && (t.contains("computer") || t.contains("screen") || t.contains("pc") || t.contains("my") || t == "lock") {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "lock"})));
+        if t.contains("lock")
+            && (t.contains("computer")
+                || t.contains("screen")
+                || t.contains("pc")
+                || t.contains("my")
+                || t == "lock")
+        {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "lock"}),
+            ));
         }
         let explicit_sleep = t == "sleep"
             || t.starts_with("sleep ")
@@ -545,16 +546,15 @@ impl VoiceClient {
         }
         let mentions_downloads = t.contains("download") || t.contains("downloads folder");
         let wants_download_count = mentions_downloads
-            && (
-                t.contains("how many")
-                    || t.contains("how much")
-                    || t.contains("count")
-                    || t.contains("number of")
-                    || t.contains("how many files")
-            );
+            && (t.contains("how many")
+                || t.contains("how much")
+                || t.contains("count")
+                || t.contains("number of")
+                || t.contains("how many files"));
         let wants_organize_downloads = mentions_downloads
             && (t.contains("organize") || t.contains("sort") || t.contains("clean up"));
-        let wants_screenshot = t.contains("screenshot") || t.contains("screen shot") || t.contains("capture screen");
+        let wants_screenshot =
+            t.contains("screenshot") || t.contains("screen shot") || t.contains("capture screen");
         let wants_open = t.contains("open") || t.contains("show");
         let wants_screenshot_folder = t.contains("screenshot folder")
             || t.contains("screenshots folder")
@@ -647,77 +647,137 @@ impl VoiceClient {
         if t.contains("bluetooth") {
             // Check if user wants to turn on/off/enable/disable
             if t.contains("turn on") || t.contains("enable") || t.contains("switch on") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth_toggle", "enable": true})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "bluetooth_toggle", "enable": true}),
+                ));
             } else if t.contains("turn off") || t.contains("disable") || t.contains("switch off") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth_toggle", "enable": false})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "bluetooth_toggle", "enable": false}),
+                ));
             } else if t.contains("toggle") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth_toggle"})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "bluetooth_toggle"}),
+                ));
             }
             // Default: open settings
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "bluetooth"})));
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "bluetooth"}),
+            ));
         }
         // WiFi control - distinguish between toggle and settings
         if t.contains("wifi") || t.contains("wi-fi") {
             // Check if user wants to turn on/off/enable/disable
             if t.contains("turn on") || t.contains("enable") || t.contains("switch on") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi_toggle", "enable": true})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "wifi_toggle", "enable": true}),
+                ));
             } else if t.contains("turn off") || t.contains("disable") || t.contains("switch off") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi_toggle", "enable": false})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "wifi_toggle", "enable": false}),
+                ));
             } else if t.contains("toggle") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi_toggle"})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "wifi_toggle"}),
+                ));
             }
             // Default: open settings
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "wifi"})));
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "wifi"}),
+            ));
         }
         if t.contains("brightness") {
             // Try to extract level
             let level = extract_number(&t).unwrap_or(50);
             if t.contains("up") || t.contains("increase") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "brightness", "level": "up"})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "brightness", "level": "up"}),
+                ));
             } else if t.contains("down") || t.contains("decrease") || t.contains("dim") {
-                return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "brightness", "level": "down"})));
+                return Some(ActionResult::action(
+                    ActionType::SystemControl,
+                    serde_json::json!({"action": "brightness", "level": "down"}),
+                ));
             }
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "brightness", "level": level})));
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "brightness", "level": level}),
+            ));
         }
         if t.contains("night light") || t.contains("night mode") || t.contains("blue light") {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "night_light"})));
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "night_light"}),
+            ));
         }
         if t.contains("do not disturb") || t.contains("dnd") || t.contains("focus mode") {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "dnd"})));
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "dnd"}),
+            ));
         }
-        if t.contains("empty") && (t.contains("trash") || t.contains("recycle") || t.contains("bin")) {
-            return Some(ActionResult::action(ActionType::SystemControl, serde_json::json!({"action": "recycle_bin"})));
+        if t.contains("empty")
+            && (t.contains("trash") || t.contains("recycle") || t.contains("bin"))
+        {
+            return Some(ActionResult::action(
+                ActionType::SystemControl,
+                serde_json::json!({"action": "recycle_bin"}),
+            ));
         }
-        
+
         // Volume control
         if t.contains("volume") || t.contains("louder") || t.contains("quieter") {
             let direction = if t.contains("up") || t.contains("louder") || t.contains("increase") {
                 "up"
-            } else if t.contains("down") || t.contains("quieter") || t.contains("decrease") || t.contains("lower") {
+            } else if t.contains("down")
+                || t.contains("quieter")
+                || t.contains("decrease")
+                || t.contains("lower")
+            {
                 "down"
             } else if t.contains("mute") {
                 "mute"
             } else {
                 "up" // default
             };
-            return Some(ActionResult::action(ActionType::VolumeControl, serde_json::json!({"direction": direction})));
+            return Some(ActionResult::action(
+                ActionType::VolumeControl,
+                serde_json::json!({"direction": direction}),
+            ));
         }
         if t == "mute" || t == "unmute" {
-            return Some(ActionResult::action(ActionType::VolumeControl, serde_json::json!({"direction": "mute"})));
+            return Some(ActionResult::action(
+                ActionType::VolumeControl,
+                serde_json::json!({"direction": "mute"}),
+            ));
         }
-        
+
         // App/URL opening - check websites first, then apps
         // Match patterns: "open chrome", "open x.com", "go to x.com", "visit github.com"
-        let open_patterns = ["open ", "open, ", "open. ", "launch ", "start ", "go to ", "visit "];
+        let open_patterns = [
+            "open ", "open, ", "open. ", "launch ", "start ", "go to ", "visit ",
+        ];
         let has_open_prefix = open_patterns.iter().any(|p| t.starts_with(p));
-        
+
         // Also match if it's just "open X" without space issues
         let words: Vec<&str> = t.split_whitespace().collect();
-        let is_open_command = words.len() >= 2 && 
-            (words[0] == "open" || words[0] == "launch" || words[0] == "start" || words[0] == "visit" ||
-             (words[0] == "go" && words.get(1) == Some(&"to")) ||
-             words[0] == "open," || words[0] == "open.");
-        
+        let is_open_command = words.len() >= 2
+            && (words[0] == "open"
+                || words[0] == "launch"
+                || words[0] == "start"
+                || words[0] == "visit"
+                || (words[0] == "go" && words.get(1) == Some(&"to"))
+                || words[0] == "open,"
+                || words[0] == "open.");
+
         if has_open_prefix || is_open_command {
             // Clean up target - remove command words and punctuation
             let raw_target = if is_open_command {
@@ -738,10 +798,7 @@ impl VoiceClient {
 
             let app_name = trim_spoken_punctuation(&raw_target);
             let app_words: Vec<&str> = app_name.split_whitespace().collect();
-            let has_spoken_tld = app_words
-                .last()
-                .map(|w| is_known_tld(w))
-                .unwrap_or(false);
+            let has_spoken_tld = app_words.last().map(|w| is_known_tld(w)).unwrap_or(false);
             let prefers_web_target = t.starts_with("visit ")
                 || t.starts_with("go to ")
                 || app_name.contains('.')
@@ -750,7 +807,7 @@ impl VoiceClient {
                 || app_name.starts_with("https://")
                 || raw_target.contains(" dot ")
                 || has_spoken_tld;
-            
+
             if app_name.is_empty() {
                 return None;
             }
@@ -758,7 +815,10 @@ impl VoiceClient {
             // Direct URL/domain opening (e.g., "open x.com", "visit github.com")
             if prefers_web_target {
                 if let Some(url) = infer_web_target_from_phrase(&app_name) {
-                    return Some(ActionResult::action(ActionType::OpenUrl, serde_json::json!({"url": url})));
+                    return Some(ActionResult::action(
+                        ActionType::OpenUrl,
+                        serde_json::json!({"url": url}),
+                    ));
                 }
             }
 
@@ -767,9 +827,9 @@ impl VoiceClient {
             if app_name.split_whitespace().count() > 4 {
                 return None;
             }
-            
+
             log::info!("Detected app open command: '{}' -> app: '{}'", t, app_name);
-            
+
             // OS-aware system app aliases
             // These map user-friendly names to the correct app name for the execute_action handler
             let system_aliases: &[(&str, &str)] = match std::env::consts::OS {
@@ -816,21 +876,24 @@ impl VoiceClient {
                 ],
                 _ => &[],
             };
-            
+
             // Check system aliases first
             for (alias, app) in system_aliases {
                 if app_name == *alias || app_name.contains(alias) {
-                    return Some(ActionResult::action(ActionType::OpenApp, serde_json::json!({"app": *app})));
+                    return Some(ActionResult::action(
+                        ActionType::OpenApp,
+                        serde_json::json!({"app": *app}),
+                    ));
                 }
             }
-            
+
             // Check if it's a website that should open in browser
             // Use EXACT match to avoid "netflix" matching "x"
             let web_apps = [
                 ("youtube", "https://youtube.com"),
                 ("gmail", "https://gmail.com"),
                 ("twitter", "https://twitter.com"),
-                ("x", "https://x.com"),  // Must be exact match
+                ("x", "https://x.com"), // Must be exact match
                 ("facebook", "https://facebook.com"),
                 ("instagram", "https://instagram.com"),
                 ("linkedin", "https://linkedin.com"),
@@ -839,7 +902,7 @@ impl VoiceClient {
                 ("netflix", "https://netflix.com"),
                 ("amazon", "https://amazon.com"),
             ];
-            
+
             for (name, url) in web_apps {
                 // Use exact match for short names like "x", contains for others
                 let matches = if name.len() <= 2 {
@@ -848,16 +911,26 @@ impl VoiceClient {
                     app_name == *name || app_name.contains(name)
                 };
                 if matches {
-                    return Some(ActionResult::action(ActionType::OpenUrl, serde_json::json!({"url": url})));
+                    return Some(ActionResult::action(
+                        ActionType::OpenUrl,
+                        serde_json::json!({"url": url}),
+                    ));
                 }
             }
-            
+
             // Otherwise treat as app (execute_action has more mappings)
-            return Some(ActionResult::action(ActionType::OpenApp, serde_json::json!({"app": app_name})));
+            return Some(ActionResult::action(
+                ActionType::OpenApp,
+                serde_json::json!({"app": app_name}),
+            ));
         }
-        
+
         // Web search
-        if t.starts_with("search ") || t.starts_with("google ") || t.starts_with("search for ") || t.starts_with("look up ") {
+        if t.starts_with("search ")
+            || t.starts_with("google ")
+            || t.starts_with("search for ")
+            || t.starts_with("look up ")
+        {
             let query = t
                 .replace("search for ", "")
                 .replace("search ", "")
@@ -866,113 +939,211 @@ impl VoiceClient {
                 .trim()
                 .to_string();
             if !query.is_empty() {
-                return Some(ActionResult::action(ActionType::WebSearch, serde_json::json!({"query": query})));
+                return Some(ActionResult::action(
+                    ActionType::WebSearch,
+                    serde_json::json!({"query": query}),
+                ));
             }
         }
-        
+
         // Media control (Spotify/general)
         // Simple controls: play, pause, next, previous
-        if t == "play" || t == "pause" || t == "stop music" || t == "resume" || t == "resume music" || t == "play music" || t == "pause music" {
-            return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "play_pause"})));
+        if t == "play"
+            || t == "pause"
+            || t == "stop music"
+            || t == "resume"
+            || t == "resume music"
+            || t == "play music"
+            || t == "pause music"
+        {
+            return Some(ActionResult::action(
+                ActionType::SpotifyControl,
+                serde_json::json!({"action": "play_pause"}),
+            ));
         }
         if t == "next" || t == "skip" || t == "next song" || t == "next track" {
-            return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "next"})));
+            return Some(ActionResult::action(
+                ActionType::SpotifyControl,
+                serde_json::json!({"action": "next"}),
+            ));
         }
         if t == "previous" || t == "previous song" || t == "last song" {
-            return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({"action": "previous"})));
+            return Some(ActionResult::action(
+                ActionType::SpotifyControl,
+                serde_json::json!({"action": "previous"}),
+            ));
         }
-        
+
         // Play specific song/artist - "play [song name]" or "play [artist]"
         // Opens Spotify, searches, and plays the first result
         if t.starts_with("play ") && word_count >= 2 && word_count <= 6 {
             let song_query = t.replace("play ", "").trim().to_string();
             if !song_query.is_empty() && song_query != "music" {
-                return Some(ActionResult::action(ActionType::SpotifyControl, serde_json::json!({
-                    "action": "play_song",
-                    "query": song_query
-                })));
+                return Some(ActionResult::action(
+                    ActionType::SpotifyControl,
+                    serde_json::json!({
+                        "action": "play_song",
+                        "query": song_query
+                    }),
+                ));
             }
         }
-        
+
         // Keyboard shortcuts (clipboard, editing)
         if t == "copy" || t == "copy that" || t == "copy this" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "copy"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "copy"}),
+            ));
         }
         if t == "paste" || t == "paste that" || t == "paste it" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "paste"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "paste"}),
+            ));
         }
         if t == "cut" || t == "cut that" || t == "cut this" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "cut"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "cut"}),
+            ));
         }
         if t == "select all" || t == "select everything" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "select_all"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "select_all"}),
+            ));
         }
         if t == "undo" || t == "undo that" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "undo"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "undo"}),
+            ));
         }
         if t == "redo" || t == "redo that" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "redo"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "redo"}),
+            ));
         }
         if t == "save" || t == "save file" || t == "save this" || t == "save it" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "save"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "save"}),
+            ));
         }
         if t == "find" || t == "search here" || t == "find in page" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "find"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "find"}),
+            ));
         }
         if t == "new tab" || t == "open new tab" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "new_tab"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "new_tab"}),
+            ));
         }
         if t == "close tab" || t == "close this tab" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "close_tab"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "close_tab"}),
+            ));
         }
         if t == "new window" || t == "open new window" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "new_window"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "new_window"}),
+            ));
         }
         if t == "refresh" || t == "reload" || t == "reload page" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "refresh"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "refresh"}),
+            ));
         }
         if t == "go back" || t == "back" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "back"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "back"}),
+            ));
         }
         if t == "go forward" || t == "forward" {
-            return Some(ActionResult::action(ActionType::KeyboardShortcut, serde_json::json!({"shortcut": "forward"})));
+            return Some(ActionResult::action(
+                ActionType::KeyboardShortcut,
+                serde_json::json!({"shortcut": "forward"}),
+            ));
         }
-        
+
         // Window management
         if t == "minimize" || t == "minimize window" || t == "minimize this" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "minimize"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "minimize"}),
+            ));
         }
-        if t == "maximize" || t == "maximize window" || t == "maximize this" || t == "full screen" || t == "fullscreen" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "maximize"})));
+        if t == "maximize"
+            || t == "maximize window"
+            || t == "maximize this"
+            || t == "full screen"
+            || t == "fullscreen"
+        {
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "maximize"}),
+            ));
         }
         if t == "close window" || t == "close this window" || t == "close this" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "close"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "close"}),
+            ));
         }
         if t == "switch window" || t == "switch app" || t == "next window" || t == "alt tab" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "switch"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "switch"}),
+            ));
         }
         if t == "snap left" || t == "move left" || t == "window left" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "snap_left"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "snap_left"}),
+            ));
         }
         if t == "snap right" || t == "move right" || t == "window right" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "snap_right"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "snap_right"}),
+            ));
         }
         if t == "show desktop" || t == "desktop" || t == "minimize all" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "show_desktop"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "show_desktop"}),
+            ));
         }
         if t == "next desktop"
             || t == "switch to next desktop"
             || t == "desktop right"
             || (t.contains("switch") && t.contains("desktop") && t.contains("next"))
         {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "next_desktop"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "next_desktop"}),
+            ));
         }
         if t == "previous desktop"
             || t == "switch to previous desktop"
             || t == "desktop left"
-            || (t.contains("switch") && t.contains("desktop") && (t.contains("previous") || t.contains("back")))
+            || (t.contains("switch")
+                && t.contains("desktop")
+                && (t.contains("previous") || t.contains("back")))
         {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "previous_desktop"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "previous_desktop"}),
+            ));
         }
         if t == "task view"
             || t == "show desktops"
@@ -980,12 +1151,18 @@ impl VoiceClient {
             || t == "switch desktop view"
             || t == "desktop view"
         {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "task_view"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "task_view"}),
+            ));
         }
         if t == "restore" || t == "restore window" {
-            return Some(ActionResult::action(ActionType::WindowControl, serde_json::json!({"action": "restore"})));
+            return Some(ActionResult::action(
+                ActionType::WindowControl,
+                serde_json::json!({"action": "restore"}),
+            ));
         }
-        
+
         // Quick responses (time, date, etc.)
         if t.contains("what time") || t.contains("what's the time") || t == "time" {
             let now = chrono::Local::now();
@@ -993,17 +1170,26 @@ impl VoiceClient {
             let tz = now.format("%Z").to_string();
             return Some(ActionResult::respond(format!("It's {} ({})", time_str, tz)));
         }
-        if t.contains("what day") || t.contains("what's today") || t.contains("today's date") || t.contains("what date") {
+        if t.contains("what day")
+            || t.contains("what's today")
+            || t.contains("today's date")
+            || t.contains("what date")
+        {
             let now = chrono::Local::now();
             let date_str = now.format("%A, %B %d, %Y").to_string();
             return Some(ActionResult::respond(format!("Today is {}", date_str)));
         }
-        
+
         None
     }
 
     /// Process clipboard operations with LLM
-    pub async fn process_clipboard(&self, content: &str, operation: &str, params: &serde_json::Value) -> Result<String, String> {
+    pub async fn process_clipboard(
+        &self,
+        content: &str,
+        operation: &str,
+        params: &serde_json::Value,
+    ) -> Result<String, String> {
         let trimmed = content.trim();
         if trimmed.is_empty() {
             return Ok(String::new());
@@ -1030,9 +1216,10 @@ impl VoiceClient {
                     normalized
                 }
             }
-            "translate" => {
-                return Err("Clipboard translation requires an LLM provider; currently disabled in local mode".to_string())
-            }
+            "translate" => return Err(
+                "Clipboard translation requires an LLM provider; currently disabled in local mode"
+                    .to_string(),
+            ),
             "summarize" => {
                 let normalized = post_process_dictation(trimmed);
                 let sentences: Vec<&str> = normalized
@@ -1043,8 +1230,17 @@ impl VoiceClient {
                 if sentences.is_empty() {
                     normalized
                 } else {
-                    let take = sentences.iter().take(3).cloned().collect::<Vec<_>>().join(". ");
-                    if take.ends_with('.') { take } else { format!("{}.", take) }
+                    let take = sentences
+                        .iter()
+                        .take(3)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(". ");
+                    if take.ends_with('.') {
+                        take
+                    } else {
+                        format!("{}.", take)
+                    }
                 }
             }
             "clean" => post_process_dictation(trimmed),
@@ -1062,29 +1258,26 @@ impl Default for VoiceClient {
 }
 
 #[allow(dead_code)]
-/// Deepgram client for real-time streaming (future use)
-pub struct DeepgramClient {
+/// Groq speech client helper.
+pub struct GroqClient {
     client: Client,
 }
 
 #[allow(dead_code)]
-impl DeepgramClient {
+impl GroqClient {
     pub fn new() -> Self {
         Self {
             client: Client::new(),
         }
     }
 
-    /// Get WebSocket URL for real-time streaming
-    pub fn get_streaming_url(&self) -> String {
-        format!(
-            "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&model=nova-2&smart_format=true&api_key={}",
-            get_deepgram_key()
-        )
+    /// Get the file transcription endpoint.
+    pub fn get_transcription_url(&self) -> &'static str {
+        "https://api.groq.com/openai/v1/audio/transcriptions"
     }
 }
 
-impl Default for DeepgramClient {
+impl Default for GroqClient {
     fn default() -> Self {
         Self::new()
     }
@@ -1098,8 +1291,8 @@ pub fn detect_local_command(text: &str) -> Option<ActionResult> {
 
 /// Encode PCM samples to WAV format for API upload
 pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
+    use hound::{SampleFormat, WavSpec, WavWriter};
     use std::io::Cursor;
-    use hound::{WavSpec, WavWriter, SampleFormat};
 
     let spec = WavSpec {
         channels: 1,
@@ -1115,13 +1308,59 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> 
 
         for &sample in samples {
             let sample_i16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
-            writer.write_sample(sample_i16)
+            writer
+                .write_sample(sample_i16)
                 .map_err(|e| format!("Failed to write sample: {}", e))?;
         }
 
-        writer.finalize()
+        writer
+            .finalize()
             .map_err(|e| format!("Failed to finalize WAV: {}", e))?;
     }
 
     Ok(buffer.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn groq_prompt_omits_empty_hints() {
+        assert!(build_groq_prompt(&[]).is_none());
+        assert!(build_groq_prompt(&["   ".to_string()]).is_none());
+    }
+
+    #[test]
+    fn groq_prompt_includes_trimmed_terms() {
+        let prompt =
+            build_groq_prompt(&["  Tauri  ".to_string(), "Groq".to_string(), "".to_string()])
+                .expect("prompt");
+
+        assert!(prompt.contains("Tauri"));
+        assert!(prompt.contains("Groq"));
+        assert!(!prompt.contains("  "));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires LISTEN_OS_GROQ_E2E_AUDIO_FILE, LISTEN_OS_GROQ_E2E_EXPECT, and GROQ_API_KEY"]
+    async fn groq_transcription_fixture_roundtrip() {
+        let audio_path = std::env::var("LISTEN_OS_GROQ_E2E_AUDIO_FILE")
+            .expect("LISTEN_OS_GROQ_E2E_AUDIO_FILE must be set");
+        let expected = std::env::var("LISTEN_OS_GROQ_E2E_EXPECT")
+            .expect("LISTEN_OS_GROQ_E2E_EXPECT must be set")
+            .to_lowercase();
+        let audio = std::fs::read(&audio_path).expect("audio fixture should be readable");
+
+        let result = VoiceClient::new()
+            .transcribe_with_hints(&audio, &[], Some("en"))
+            .await
+            .expect("Groq transcription should succeed");
+
+        assert!(
+            result.text.to_lowercase().contains(&expected),
+            "expected transcription to contain '{expected}', got '{}'",
+            result.text
+        );
+    }
 }

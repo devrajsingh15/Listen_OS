@@ -1,20 +1,22 @@
 //! Tauri command handlers for Listen OS
-//! 
+//!
 //! Cloud-first architecture with embedded API keys.
 //! Users just speak - we handle everything.
 
 pub mod custom;
 
-use crate::AppState;
 use crate::audio::AudioDevice;
-use crate::cloud::{self, VoiceClient, ActionResult, ActionType, VoiceContext, VoiceMode, ConversationContext};
-use crate::config::{
-    LanguagePreferences,
-    LocalApiSettings,
-    VibeActivationMode,
-    VibeCodingConfig,
-    VibeTargetTool,
+use crate::cloud::{
+    self, ActionResult, ActionType, ConversationContext, VoiceClient, VoiceContext, VoiceMode,
 };
+use crate::config::{
+    LanguagePreferences, LocalApiSettings, VibeActivationMode, VibeCodingConfig, VibeTargetTool,
+};
+use crate::delivery::{
+    capture_surface_snapshot, strategy_chain, verify_inserted_text, DeliveryPhase,
+    DeliveryStatusSnapshot, DeliveryStrategy,
+};
+use crate::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -26,6 +28,8 @@ pub struct StatusResponse {
     pub is_streaming: bool,
     pub audio_device: Option<String>,
     pub last_transcription: Option<String>,
+    pub audio_status: crate::AudioRuntimeStatus,
+    pub delivery_status: DeliveryStatusSnapshot,
 }
 
 /// Transcription result
@@ -55,6 +59,7 @@ pub struct VoiceProcessingResult {
     pub response_text: Option<String>,
     /// Session ID for conversation continuity
     pub session_id: String,
+    pub delivery_status: DeliveryStatusSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,10 +135,7 @@ fn normalized_language_preferences(preferences: &LanguagePreferences) -> Languag
     }
 }
 
-fn should_run_multilingual_transform(
-    text: &str,
-    preferences: &LanguagePreferences,
-) -> bool {
+fn should_run_multilingual_transform(text: &str, preferences: &LanguagePreferences) -> bool {
     if text.trim().is_empty() {
         return false;
     }
@@ -302,9 +304,9 @@ fn is_coding_surface_app(app_name: &str) -> bool {
 }
 
 fn starts_with_any(text: &str, prefixes: &[&str]) -> bool {
-    prefixes.iter().any(|prefix| {
-        text == *prefix || text.starts_with(&format!("{} ", prefix))
-    })
+    prefixes
+        .iter()
+        .any(|prefix| text == *prefix || text.starts_with(&format!("{} ", prefix)))
 }
 
 fn coding_prompt_signal_score(text: &str) -> u8 {
@@ -487,7 +489,7 @@ async fn enhance_vibe_coding_prompt(
 #[tauri::command]
 pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String> {
     let mut is_listening = state.is_listening.lock().await;
-    
+
     if *is_listening {
         // Already listening - just return true instead of error
         return Ok(true);
@@ -505,6 +507,10 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
         accumulator.clear();
     }
 
+    if let Ok(mut delivery) = state.delivery.lock() {
+        delivery.reset();
+    }
+
     // Start audio streaming
     let preferred_device = {
         let audio = state.audio.lock().await;
@@ -518,34 +524,14 @@ pub async fn start_listening(state: State<'_, AppState>) -> Result<bool, String>
 
     *is_listening = true;
 
-    // Spawn task to collect audio chunks
-    let accumulator_clone = state.accumulator.clone();
-    let is_listening_clone = state.is_listening.clone();
-    
-    tokio::spawn(async move {
-        loop {
-            // Check if still listening
-            if !*is_listening_clone.lock().await {
-                break;
-            }
-            
-            match receiver.try_recv() {
-                Ok(chunk) => {
-                    let mut acc = accumulator_clone.lock().await;
-                    acc.add_samples(&chunk);
-                }
-                Err(crossbeam_channel::TryRecvError::Empty) => {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                }
-                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    break;
-                }
-            }
-        }
-    });
-    
+    crate::streaming::spawn_audio_receiver_task(
+        receiver,
+        state.accumulator.clone(),
+        state.is_listening.clone(),
+    );
+
     log::info!("Listen OS: Started listening");
-    
+
     Ok(true)
 }
 
@@ -569,13 +555,13 @@ pub async fn stop_listening(
         let mut is_listening = state.is_listening.lock().await;
         *is_listening = false;
     }
-    
+
     // Stop streaming
     {
         let streamer = state.streamer.lock().await;
         streamer.stop_streaming();
     }
-    
+
     // Brief yield for final audio chunks to flush
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
@@ -588,7 +574,10 @@ pub async fn stop_listening(
     // Get accumulated audio
     let (samples, sample_rate) = {
         let accumulator = state.accumulator.lock().await;
-        (accumulator.get_samples().to_vec(), accumulator.sample_rate())
+        (
+            accumulator.get_samples().to_vec(),
+            accumulator.sample_rate(),
+        )
     };
 
     // Calculate audio energy metrics to detect true silence and avoid hallucinated text.
@@ -601,10 +590,7 @@ pub async fn stop_listening(
         .iter()
         .map(|s| s.abs())
         .fold(0.0_f32, |acc, value| acc.max(value));
-    let active_sample_count = samples
-        .iter()
-        .filter(|sample| sample.abs() > 0.012)
-        .count();
+    let active_sample_count = samples.iter().filter(|sample| sample.abs() > 0.012).count();
     let active_ratio = if samples.is_empty() {
         0.0
     } else {
@@ -620,7 +606,8 @@ pub async fn stop_listening(
         active_ratio
     );
 
-    if samples.is_empty() || samples.len() < 1600 { // Less than 100ms
+    if samples.is_empty() || samples.len() < 1600 {
+        // Less than 100ms
         let mut is_processing = state.is_processing.lock().await;
         *is_processing = false;
         return Err("Recording too short.".to_string());
@@ -659,14 +646,12 @@ pub async fn stop_listening(
             )
             .await
         {
-            Ok(result) => {
-                TranscriptionResult {
-                    text: result.text,
-                    duration_ms,
-                    confidence: result.confidence,
-                    is_final: result.is_final,
-                }
-            }
+            Ok(result) => TranscriptionResult {
+                text: result.text,
+                duration_ms,
+                confidence: result.confidence,
+                is_final: result.is_final,
+            },
             Err(transcription_err) => {
                 log::error!("Transcription failed: {}", transcription_err);
                 {
@@ -716,14 +701,29 @@ pub async fn stop_listening(
             executed: true,
             response_text: None,
             session_id: "silent".to_string(),
+            delivery_status: state
+                .delivery
+                .lock()
+                .map(|delivery| delivery.snapshot())
+                .unwrap_or_default(),
         });
     }
-    
+
     // Also filter known Whisper hallucination phrases that appear on silence
     let hallucination_phrases = [
-        "thank you", "thanks", "thanks for watching", "thank you for watching",
-        "subscribe", "like and subscribe", "see you", "bye", "goodbye",
-        "you", ".", "..", "...",
+        "thank you",
+        "thanks",
+        "thanks for watching",
+        "thank you for watching",
+        "subscribe",
+        "like and subscribe",
+        "see you",
+        "bye",
+        "goodbye",
+        "you",
+        ".",
+        "..",
+        "...",
     ];
     let text_lower = transcription.text.trim().to_lowercase();
     let is_hallucination = hallucination_phrases.iter().any(|&p| text_lower == p);
@@ -750,7 +750,7 @@ pub async fn stop_listening(
         );
         let mut is_processing = state.is_processing.lock().await;
         *is_processing = false;
-        
+
         // Return a silent success (NoAction) so frontend just dismisses quietly
         return Ok(VoiceProcessingResult {
             transcription: TranscriptionResult {
@@ -770,20 +770,26 @@ pub async fn stop_listening(
             executed: true,
             response_text: None,
             session_id: "silent".to_string(),
+            delivery_status: state
+                .delivery
+                .lock()
+                .map(|delivery| delivery.snapshot())
+                .unwrap_or_default(),
         });
     }
 
-    let multilingual = match transform_multilingual_text(&transcription.text, &language_preferences).await {
-        Ok(result) => result,
-        Err(err) => {
-            log::warn!("Multilingual transform skipped due to error: {}", err);
-            MultilingualTextResult {
-                routing_text: transcription.text.clone(),
-                output_text: transcription.text.clone(),
-                transformed: false,
+    let multilingual =
+        match transform_multilingual_text(&transcription.text, &language_preferences).await {
+            Ok(result) => result,
+            Err(err) => {
+                log::warn!("Multilingual transform skipped due to error: {}", err);
+                MultilingualTextResult {
+                    routing_text: transcription.text.clone(),
+                    output_text: transcription.text.clone(),
+                    transformed: false,
+                }
             }
-        }
-    };
+        };
 
     let intent_text = if multilingual.routing_text.trim().is_empty() {
         transcription.text.clone()
@@ -811,7 +817,10 @@ pub async fn stop_listening(
         // Add user message to conversation
         conversation.add_user_message(transcription.text.clone());
 
-        (ConversationContext::default(), conversation.session_id.clone())
+        (
+            ConversationContext::default(),
+            conversation.session_id.clone(),
+        )
     };
 
     let local_router_action = cloud::detect_local_command(&intent_text);
@@ -855,35 +864,35 @@ pub async fn stop_listening(
     };
 
     let mut action = if dictation_only {
+        log::info!(
+            "Handsfree dictation mode active, bypassing intent routing and forcing TypeText"
+        );
+        ActionResult {
+            action_type: ActionType::TypeText,
+            payload: serde_json::json!({
+                "dictation_only": true,
+                "source": "assistant_handsfree"
+            }),
+            refined_text: Some(transcription.text.clone()),
+            response_text: None,
+            requires_confirmation: false,
+        }
+    } else if let Some(local_action) = local_router_action {
+        log::info!(
+            "Local router selected action {:?} for transcript '{}'",
+            local_action.action_type,
+            intent_text
+        );
+        local_action
+    } else if should_route_locally_first(&intent_text, &context) {
+        if let Some(local_action) = cloud::detect_local_command(&intent_text) {
             log::info!(
-                "Handsfree dictation mode active, bypassing intent routing and forcing TypeText"
-            );
-            ActionResult {
-                action_type: ActionType::TypeText,
-                payload: serde_json::json!({
-                    "dictation_only": true,
-                    "source": "assistant_handsfree"
-                }),
-                refined_text: Some(transcription.text.clone()),
-                response_text: None,
-                requires_confirmation: false,
-            }
-        } else if let Some(local_action) = local_router_action {
-            log::info!(
-                "Local router selected action {:?} for transcript '{}'",
+                "Local router first selected action {:?} for transcript '{}'",
                 local_action.action_type,
                 intent_text
             );
             local_action
-        } else if should_route_locally_first(&intent_text, &context) {
-            if let Some(local_action) = cloud::detect_local_command(&intent_text) {
-                log::info!(
-                    "Local router first selected action {:?} for transcript '{}'",
-                    local_action.action_type,
-                    intent_text
-                );
-                local_action
-            } else {
+        } else {
             resolve_intent_action().await
         }
     } else {
@@ -917,8 +926,7 @@ pub async fn stop_listening(
             }),
             refined_text: None,
             response_text: Some(
-                "Ignoring shutdown/restart because this sounded like a goodbye phrase."
-                    .to_string(),
+                "Ignoring shutdown/restart because this sounded like a goodbye phrase.".to_string(),
             ),
             requires_confirmation: false,
         };
@@ -975,7 +983,8 @@ pub async fn stop_listening(
     }
 
     let confirms_enabled = confirmations_enabled();
-    let should_confirm_action = action.requires_confirmation || action_requires_confirmation(&action);
+    let should_confirm_action =
+        action.requires_confirmation || action_requires_confirmation(&action);
     // Safety override: even when global confirmations are disabled, always gate power actions.
     let requires_confirmation = if confirms_enabled {
         should_confirm_action
@@ -1030,10 +1039,17 @@ pub async fn stop_listening(
                         "execution_message",
                         serde_json::Value::String(result.message.clone()),
                     );
-                    upsert_action_payload_field(&mut action, "executed", serde_json::Value::Bool(true));
+                    upsert_action_payload_field(
+                        &mut action,
+                        "executed",
+                        serde_json::Value::Bool(true),
+                    );
 
                     if action.response_text.is_none()
-                        && !matches!(action.action_type, ActionType::TypeText | ActionType::NoAction)
+                        && !matches!(
+                            action.action_type,
+                            ActionType::TypeText | ActionType::NoAction
+                        )
                     {
                         action.response_text = Some(result.message.clone());
                     }
@@ -1043,10 +1059,15 @@ pub async fn stop_listening(
                         "execution_error",
                         serde_json::Value::String(result.message.clone()),
                     );
-                    upsert_action_payload_field(&mut action, "executed", serde_json::Value::Bool(false));
+                    upsert_action_payload_field(
+                        &mut action,
+                        "executed",
+                        serde_json::Value::Bool(false),
+                    );
 
                     if action.response_text.is_none() {
-                        action.response_text = Some(format!("I couldn't complete that: {}", result.message));
+                        action.response_text =
+                            Some(format!("I couldn't complete that: {}", result.message));
                     }
                 }
             }
@@ -1056,7 +1077,11 @@ pub async fn stop_listening(
                     "execution_error",
                     serde_json::Value::String(err.clone()),
                 );
-                upsert_action_payload_field(&mut action, "executed", serde_json::Value::Bool(false));
+                upsert_action_payload_field(
+                    &mut action,
+                    "executed",
+                    serde_json::Value::Bool(false),
+                );
 
                 if action.response_text.is_none() {
                     action.response_text = Some(format!("I couldn't complete that: {}", err));
@@ -1070,17 +1095,17 @@ pub async fn stop_listening(
             .as_ref()
             .map(|result| result.success)
             .unwrap_or(false);
-    
+
     // Log execution errors
     if let Err(ref e) = execute_result {
         let mut error_log = state.error_log.lock().await;
         error_log.log_error_with_details(
             crate::error_log::ErrorType::ActionExecution,
             format!("Failed to execute {:?}", action.action_type),
-            e.clone()
+            e.clone(),
         );
     }
-    
+
     // Track typed text for correction learning
     if executed && action.action_type == ActionType::TypeText {
         if let Some(ref typed) = action.refined_text {
@@ -1093,14 +1118,18 @@ pub async fn stop_listening(
     {
         let mut conversation = state.conversation.lock().await;
         let response_content = if requires_confirmation {
-            action.response_text.clone()
+            action
+                .response_text
+                .clone()
                 .unwrap_or_else(|| format!("Pending confirmation: {}", summarize_action(&action)))
         } else {
-            action.response_text.clone()
+            action
+                .response_text
+                .clone()
                 .or_else(|| action.refined_text.clone())
                 .unwrap_or_else(|| format!("Executed: {:?}", action.action_type))
         };
-        
+
         conversation.add_assistant_message(
             response_content,
             Some(action.action_type),
@@ -1130,6 +1159,11 @@ pub async fn stop_listening(
         executed,
         response_text: action.response_text,
         session_id,
+        delivery_status: state
+            .delivery
+            .lock()
+            .map(|delivery| delivery.snapshot())
+            .unwrap_or_default(),
     };
 
     // Save to history
@@ -1158,19 +1192,29 @@ pub async fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, St
     let is_processing = *state.is_processing.lock().await;
     let audio = state.audio.lock().await;
     let streamer = state.streamer.lock().await;
-    
+    let audio_status = streamer.snapshot_runtime_status();
+    let delivery_status = state
+        .delivery
+        .lock()
+        .map(|delivery| delivery.snapshot())
+        .unwrap_or_default();
+
     Ok(StatusResponse {
         is_listening,
         is_processing,
         is_streaming: streamer.is_streaming(),
         audio_device: audio.selected_device.clone(),
         last_transcription: None,
+        audio_status,
+        delivery_status,
     })
 }
 
 /// Get a pending action waiting for user confirmation.
 #[tauri::command]
-pub async fn get_pending_action(state: State<'_, AppState>) -> Result<Option<PendingActionResponse>, String> {
+pub async fn get_pending_action(
+    state: State<'_, AppState>,
+) -> Result<Option<PendingActionResponse>, String> {
     let pending = state.pending_action.lock().await;
     Ok(pending.as_ref().map(|p| PendingActionResponse {
         id: p.id.clone(),
@@ -1203,7 +1247,10 @@ pub async fn confirm_pending_action(state: State<'_, AppState>) -> Result<Comman
             let mut error_log = state.error_log.lock().await;
             error_log.log_error_with_details(
                 crate::error_log::ErrorType::ActionExecution,
-                format!("Failed to execute confirmed {:?}", pending.action.action_type),
+                format!(
+                    "Failed to execute confirmed {:?}",
+                    pending.action.action_type
+                ),
                 e.clone(),
             );
             Err(e)
@@ -1323,18 +1370,7 @@ fn normalize_web_target(target: &str) -> Option<String> {
 fn is_known_tld(token: &str) -> bool {
     matches!(
         token,
-        "com"
-            | "org"
-            | "net"
-            | "io"
-            | "ai"
-            | "dev"
-            | "app"
-            | "co"
-            | "us"
-            | "in"
-            | "edu"
-            | "gov"
+        "com" | "org" | "net" | "io" | "ai" | "dev" | "app" | "co" | "us" | "in" | "edu" | "gov"
     )
 }
 
@@ -1357,11 +1393,7 @@ fn infer_web_target_from_phrase(target: &str, allow_single_word: bool) -> Option
         let tld = words[words.len() - 1];
         if is_known_tld(tld) {
             let host = words[..words.len() - 1].join("");
-            if !host.is_empty()
-                && host
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
-            {
+            if !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
                 return Some(format!("https://{}.{}", host, tld));
             }
         }
@@ -1371,9 +1403,7 @@ fn infer_web_target_from_phrase(target: &str, allow_single_word: bool) -> Option
         let token = words[0];
         if token.len() >= 2
             && token.len() <= 48
-            && token
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         {
             return Some(format!("https://{}.com", token));
         }
@@ -1422,7 +1452,6 @@ fn normalize_spoken_command_text(text: &str) -> String {
 
     t
 }
-
 
 fn upsert_action_payload_field(action: &mut ActionResult, key: &str, value: serde_json::Value) {
     if let Some(obj) = action.payload.as_object_mut() {
@@ -1497,12 +1526,10 @@ fn looks_like_command_phrase(text: &str) -> bool {
     }
 
     if t.contains("download")
-        && (
-            t.contains("how many")
-                || t.contains("how much")
-                || t.contains("count")
-                || t.contains("number of")
-        )
+        && (t.contains("how many")
+            || t.contains("how much")
+            || t.contains("count")
+            || t.contains("number of"))
     {
         return true;
     }
@@ -1590,9 +1617,14 @@ fn is_power_system_action(action: &ActionResult) -> bool {
 
 fn action_requires_confirmation(action: &ActionResult) -> bool {
     match action.action_type {
-        ActionType::RunCommand | ActionType::SendEmail | ActionType::MultiStep | ActionType::CustomCommand => true,
+        ActionType::RunCommand
+        | ActionType::SendEmail
+        | ActionType::MultiStep
+        | ActionType::CustomCommand => true,
         ActionType::SystemControl => {
-            let system_action = action.payload.get("action")
+            let system_action = action
+                .payload
+                .get("action")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_lowercase();
@@ -1614,19 +1646,35 @@ fn action_requires_confirmation(action: &ActionResult) -> bool {
 fn summarize_action(action: &ActionResult) -> String {
     match action.action_type {
         ActionType::OpenApp => {
-            let app = action.payload.get("app").and_then(|v| v.as_str()).unwrap_or("application");
+            let app = action
+                .payload
+                .get("app")
+                .and_then(|v| v.as_str())
+                .unwrap_or("application");
             format!("Open {}", app)
         }
         ActionType::OpenUrl => {
-            let url = action.payload.get("url").and_then(|v| v.as_str()).unwrap_or("URL");
+            let url = action
+                .payload
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("URL");
             format!("Open {}", url)
         }
         ActionType::WebSearch => {
-            let query = action.payload.get("query").and_then(|v| v.as_str()).unwrap_or("query");
+            let query = action
+                .payload
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("query");
             format!("Search web for \"{}\"", query)
         }
         ActionType::SystemControl => {
-            let system_action = action.payload.get("action").and_then(|v| v.as_str()).unwrap_or("system action");
+            let system_action = action
+                .payload
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("system action");
             match system_action {
                 "organize_downloads" => "Organize Downloads folder".to_string(),
                 "downloads_count" => "Count items in Downloads folder".to_string(),
@@ -1636,20 +1684,36 @@ fn summarize_action(action: &ActionResult) -> String {
             }
         }
         ActionType::RunCommand => {
-            let cmd = action.payload.get("command").and_then(|v| v.as_str()).unwrap_or("command");
+            let cmd = action
+                .payload
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("command");
             format!("Run command: {}", cmd)
         }
         ActionType::SendEmail => "Send email".to_string(),
         ActionType::VolumeControl => {
-            let direction = action.payload.get("direction").and_then(|v| v.as_str()).unwrap_or("change");
+            let direction = action
+                .payload
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("change");
             format!("Volume {}", direction)
         }
         ActionType::WindowControl => {
-            let window_action = action.payload.get("action").and_then(|v| v.as_str()).unwrap_or("window action");
+            let window_action = action
+                .payload
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("window action");
             format!("Window {}", window_action)
         }
         ActionType::KeyboardShortcut => {
-            let shortcut = action.payload.get("shortcut").and_then(|v| v.as_str()).unwrap_or("shortcut");
+            let shortcut = action
+                .payload
+                .get("shortcut")
+                .and_then(|v| v.as_str())
+                .unwrap_or("shortcut");
             format!("Keyboard shortcut: {}", shortcut)
         }
         ActionType::TypeText => {
@@ -1716,52 +1780,52 @@ async fn open_url_internal(url: &str) -> Result<CommandResult, String> {
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let cmd = format!("xdg-open \"{}\" 2>/dev/null || open \"{}\"", normalized_url, normalized_url);
+        let cmd = format!(
+            "xdg-open \"{}\" 2>/dev/null || open \"{}\"",
+            normalized_url, normalized_url
+        );
         run_system_command(cmd).await
     }
 }
 
-async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+async fn execute_action_internal(
+    action: &ActionResult,
+    state: &State<'_, AppState>,
+) -> Result<CommandResult, String> {
     match action.action_type {
         // Conversational actions - no system action needed
-        ActionType::Respond => {
-            Ok(CommandResult {
-                success: true,
-                message: action.response_text.clone().unwrap_or_else(|| "Response sent".to_string()),
-                output: action.response_text.clone(),
-            })
-        }
-        
-        ActionType::Clarify => {
-            Ok(CommandResult {
-                success: true,
-                message: action.response_text.clone().unwrap_or_else(|| "Clarification requested".to_string()),
-                output: action.response_text.clone(),
-            })
-        }
-        
+        ActionType::Respond => Ok(CommandResult {
+            success: true,
+            message: action
+                .response_text
+                .clone()
+                .unwrap_or_else(|| "Response sent".to_string()),
+            output: action.response_text.clone(),
+        }),
+
+        ActionType::Clarify => Ok(CommandResult {
+            success: true,
+            message: action
+                .response_text
+                .clone()
+                .unwrap_or_else(|| "Clarification requested".to_string()),
+            output: action.response_text.clone(),
+        }),
+
         // Clipboard actions
-        ActionType::ClipboardFormat | ActionType::ClipboardTranslate | 
-        ActionType::ClipboardSummarize | ActionType::ClipboardClean => {
-            execute_clipboard_action(action, state).await
-        }
-        
+        ActionType::ClipboardFormat
+        | ActionType::ClipboardTranslate
+        | ActionType::ClipboardSummarize
+        | ActionType::ClipboardClean => execute_clipboard_action(action, state).await,
+
         // App integration actions
-        ActionType::SpotifyControl => {
-            execute_spotify_action(action, state).await
-        }
-        
-        ActionType::DiscordControl => {
-            execute_discord_action(action, state).await
-        }
-        
-        ActionType::SystemControl => {
-            execute_system_action(action, state).await
-        }
-        
-        ActionType::CustomCommand => {
-            execute_custom_command(action, state).await
-        }
+        ActionType::SpotifyControl => execute_spotify_action(action, state).await,
+
+        ActionType::DiscordControl => execute_discord_action(action, state).await,
+
+        ActionType::SystemControl => execute_system_action(action, state).await,
+
+        ActionType::CustomCommand => execute_custom_command(action, state).await,
 
         ActionType::TypeText => {
             // Get text from refined_text or payload
@@ -1772,7 +1836,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
             } else {
                 String::new()
             };
-            
+
             if text.is_empty() {
                 return Ok(CommandResult {
                     success: false,
@@ -1780,17 +1844,19 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     output: None,
                 });
             }
-            
-            type_text_internal(text).await
+
+            type_text_internal(Some(state), text).await
         }
-        
+
         ActionType::OpenApp => {
-            let app = action.payload.get("app")
+            let app = action
+                .payload
+                .get("app")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim()
                 .to_lowercase();
-            
+
             if app.is_empty() {
                 return Ok(CommandResult {
                     success: false,
@@ -1801,22 +1867,25 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
 
             // If the "app" looks like a URL/domain, open it in browser directly.
             if let Some(url) = normalize_web_target(&app) {
-                log::info!("OpenApp target looked like URL, redirecting to browser: {}", url);
+                log::info!(
+                    "OpenApp target looked like URL, redirecting to browser: {}",
+                    url
+                );
                 return open_url_internal(&url).await;
             }
-            
+
             log::info!("Opening app: {}", app);
-            
+
             #[cfg(windows)]
             {
                 use std::process::Command;
-                
+
                 // Try multiple methods in order:
                 // 1. Known app mappings (native commands, URI schemes)
                 // 2. Start by name
                 // 3. URI scheme fallback
                 // 4. Web fallback for popular apps
-                
+
                 // Map common app names to Windows commands/URIs
                 let known_apps: &[(&str, &str, Option<&str>)] = &[
                     // (name, primary_cmd, web_fallback)
@@ -1827,7 +1896,11 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     ("microsoft store", "ms-windows-store:", None),
                     ("mail", "outlookmail:", Some("https://outlook.live.com")),
                     ("outlook", "outlookmail:", Some("https://outlook.live.com")),
-                    ("calendar", "outlookcal:", Some("https://outlook.live.com/calendar")),
+                    (
+                        "calendar",
+                        "outlookcal:",
+                        Some("https://outlook.live.com/calendar"),
+                    ),
                     ("calculator", "calculator:", None),
                     ("camera", "microsoft.windows.camera:", None),
                     ("maps", "bingmaps:", Some("https://maps.google.com")),
@@ -1835,17 +1908,19 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     ("clock", "ms-clock:", None),
                     ("alarms", "ms-clock:", None),
                     ("weather", "bingweather:", Some("https://weather.com")),
-                    
                     // Popular apps with URI schemes and web fallbacks
                     ("whatsapp", "whatsapp:", Some("https://web.whatsapp.com")),
                     ("spotify", "spotify:", Some("https://open.spotify.com")),
                     ("discord", "discord:", Some("https://discord.com/app")),
                     ("slack", "slack:", Some("https://app.slack.com")),
                     ("teams", "msteams:", Some("https://teams.microsoft.com")),
-                    ("microsoft teams", "msteams:", Some("https://teams.microsoft.com")),
+                    (
+                        "microsoft teams",
+                        "msteams:",
+                        Some("https://teams.microsoft.com"),
+                    ),
                     ("zoom", "zoommtg:", Some("https://zoom.us/join")),
                     ("telegram", "tg:", Some("https://web.telegram.org")),
-                    
                     // Browsers
                     ("chrome", "chrome", None),
                     ("google chrome", "chrome", None),
@@ -1853,7 +1928,6 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     ("edge", "msedge", None),
                     ("microsoft edge", "msedge", None),
                     ("brave", "brave", None),
-                    
                     // Common desktop apps
                     ("notepad", "notepad", None),
                     ("word", "winword", None),
@@ -1873,7 +1947,6 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     ("files", "explorer", None),
                     ("task manager", "taskmgr", None),
                     ("control panel", "control", None),
-                    
                     // Web-only apps
                     ("youtube", "https://youtube.com", None),
                     ("gmail", "https://gmail.com", None),
@@ -1887,10 +1960,10 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     ("github", "https://github.com", None),
                     ("netflix", "https://netflix.com", None),
                 ];
-                
+
                 // Find matching app
                 let app_info = known_apps.iter().find(|(name, _, _)| *name == app.as_str());
-                
+
                 if let Some((_, primary_cmd, web_fallback)) = app_info {
                     // Try primary command first
                     let launch_cmd = if primary_cmd.contains("://") || primary_cmd.ends_with(':') {
@@ -1898,11 +1971,9 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     } else {
                         format!("start {}", primary_cmd)
                     };
-                    
-                    let result = Command::new("cmd")
-                        .args(["/C", &launch_cmd])
-                        .output();
-                    
+
+                    let result = Command::new("cmd").args(["/C", &launch_cmd]).output();
+
                     match result {
                         Ok(output) if output.status.success() => {
                             return Ok(CommandResult {
@@ -1914,7 +1985,10 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                         _ => {
                             // Try web fallback if available
                             if let Some(web_url) = web_fallback {
-                                log::info!("Primary launch failed, trying web fallback: {}", web_url);
+                                log::info!(
+                                    "Primary launch failed, trying web fallback: {}",
+                                    web_url
+                                );
                                 let _ = Command::new("cmd")
                                     .args(["/C", "start", "", web_url])
                                     .spawn();
@@ -1927,7 +2001,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                         }
                     }
                 }
-                
+
                 // Fallback:
                 // 1) If executable is available in PATH, start it.
                 // 2) Otherwise treat as a likely website (e.g., "notion" -> notion.com).
@@ -1938,9 +2012,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     .unwrap_or(false);
 
                 if executable_exists {
-                    let result = Command::new("cmd")
-                        .args(["/C", "start", "", &app])
-                        .spawn();
+                    let result = Command::new("cmd").args(["/C", "start", "", &app]).spawn();
 
                     return match result {
                         Ok(_) => Ok(CommandResult {
@@ -1967,16 +2039,14 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     output: None,
                 })
             }
-            
+
             #[cfg(target_os = "macos")]
             {
                 use std::process::Command;
-                
+
                 // Try open -a first
-                let result = Command::new("open")
-                    .args(["-a", &app])
-                    .output();
-                
+                let result = Command::new("open").args(["-a", &app]).output();
+
                 if let Ok(output) = result {
                     if output.status.success() {
                         return Ok(CommandResult {
@@ -1986,7 +2056,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                         });
                     }
                 }
-                
+
                 // Fallback to web version for known apps
                 let web_fallback: Option<&str> = match app.as_str() {
                     "whatsapp" => Some("https://web.whatsapp.com"),
@@ -1996,7 +2066,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     "telegram" => Some("https://web.telegram.org"),
                     _ => None,
                 };
-                
+
                 if let Some(url) = web_fallback {
                     let _ = Command::new("open").arg(url).spawn();
                     return Ok(CommandResult {
@@ -2016,20 +2086,22 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     output: None,
                 })
             }
-            
+
             #[cfg(not(any(windows, target_os = "macos")))]
             {
                 let cmd = format!("xdg-open {} 2>/dev/null || open {}", app, app);
                 run_system_command(cmd).await
             }
         }
-        
+
         ActionType::WebSearch => {
-            let query = action.payload.get("query")
+            let query = action
+                .payload
+                .get("query")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
-            
+
             if query.is_empty() {
                 return Ok(CommandResult {
                     success: false,
@@ -2037,19 +2109,17 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     output: None,
                 });
             }
-            
+
             log::info!("Searching for: {}", query);
-            
+
             let encoded_query = query.replace(" ", "+");
             let url = format!("https://www.google.com/search?q={}", encoded_query);
-            
+
             #[cfg(windows)]
             {
                 use std::process::Command;
-                let result = Command::new("cmd")
-                    .args(["/C", "start", "", &url])
-                    .spawn();
-                
+                let result = Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+
                 match result {
                     Ok(_) => Ok(CommandResult {
                         success: true,
@@ -2059,19 +2129,21 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     Err(e) => Err(format!("Failed to search: {}", e)),
                 }
             }
-            
+
             #[cfg(not(windows))]
             {
                 let cmd = format!("open \"{}\"", url);
                 run_system_command(cmd).await
             }
         }
-        
+
         ActionType::VolumeControl => {
-            let direction = action.payload.get("direction")
+            let direction = action
+                .payload
+                .get("direction")
                 .and_then(|v| v.as_str())
                 .unwrap_or("up");
-            
+
             #[cfg(windows)]
             {
                 let key_code = match direction {
@@ -2086,21 +2158,27 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                 );
                 let _ = run_system_command(cmd).await;
             }
-            
+
             #[cfg(target_os = "macos")]
             {
                 use std::process::Command;
                 let script = match direction {
-                    "up" => r#"set volume output volume ((output volume of (get volume settings)) + 10)"#,
-                    "down" => r#"set volume output volume ((output volume of (get volume settings)) - 10)"#,
-                    "mute" => r#"set volume output muted not (output muted of (get volume settings))"#,
-                    _ => r#"set volume output volume ((output volume of (get volume settings)) + 10)"#,
+                    "up" => {
+                        r#"set volume output volume ((output volume of (get volume settings)) + 10)"#
+                    }
+                    "down" => {
+                        r#"set volume output volume ((output volume of (get volume settings)) - 10)"#
+                    }
+                    "mute" => {
+                        r#"set volume output muted not (output muted of (get volume settings))"#
+                    }
+                    _ => {
+                        r#"set volume output volume ((output volume of (get volume settings)) + 10)"#
+                    }
                 };
-                let _ = Command::new("osascript")
-                    .args(["-e", script])
-                    .output();
+                let _ = Command::new("osascript").args(["-e", script]).output();
             }
-            
+
             #[cfg(not(any(windows, target_os = "macos")))]
             {
                 // Linux: use pactl or amixer
@@ -2112,65 +2190,75 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                 };
                 let _ = run_system_command(cmd.to_string()).await;
             }
-            
+
             Ok(CommandResult {
                 success: true,
                 message: format!("Volume {}", direction),
                 output: None,
             })
         }
-        
+
         ActionType::RunCommand => {
-            let cmd = action.payload.get("command")
+            let cmd = action
+                .payload
+                .get("command")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            
+
             if cmd.is_empty() {
                 return Err("No command specified".to_string());
             }
-            
+
             run_system_command(cmd.to_string()).await
         }
-        
+
         ActionType::OpenUrl => {
-            let url = action.payload.get("url")
+            let url = action
+                .payload
+                .get("url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
             open_url_internal(url).await
         }
-        
+
         ActionType::SendEmail => {
             // Extract email details
-            let to = action.payload.get("to")
+            let to = action
+                .payload
+                .get("to")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let subject = action.payload.get("subject")
+            let subject = action
+                .payload
+                .get("subject")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let body = action.payload.get("body")
+            let body = action
+                .payload
+                .get("body")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            
+
             // URL encode the parts
             let encoded_subject = subject.replace(" ", "+");
             let encoded_body = body.replace(" ", "+").replace("\n", "%0A");
-            
+
             // Open Gmail compose
             let gmail_url = format!(
                 "https://mail.google.com/mail/?view=cm&to={}&su={}&body={}",
                 to, encoded_subject, encoded_body
             );
-            
+
             log::info!("Opening email compose: to={}", to);
-            
+
             #[cfg(windows)]
             {
                 use std::process::Command;
                 let result = Command::new("cmd")
                     .args(["/C", "start", "", &gmail_url])
                     .spawn();
-                
+
                 match result {
                     Ok(_) => Ok(CommandResult {
                         success: true,
@@ -2180,24 +2268,23 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                     Err(e) => Err(format!("Failed to open email: {}", e)),
                 }
             }
-            
+
             #[cfg(not(windows))]
             {
                 let cmd = format!("open \"{}\"", gmail_url);
                 run_system_command(cmd).await
             }
         }
-        
+
         ActionType::MultiStep => {
             // Execute multiple actions in sequence
-            let steps = action.payload.get("steps")
-                .and_then(|v| v.as_array());
-            
+            let steps = action.payload.get("steps").and_then(|v| v.as_array());
+
             if let Some(steps) = steps {
                 log::info!("Executing {} steps", steps.len());
                 let mut success_count = 0usize;
                 let mut errors: Vec<String> = Vec::new();
-                
+
                 for (i, step) in steps.iter().enumerate() {
                     let step_action_type = match step["action"].as_str().unwrap_or("") {
                         "open_app" => ActionType::OpenApp,
@@ -2214,7 +2301,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                             continue;
                         }
                     };
-                    
+
                     let step_result = ActionResult {
                         action_type: step_action_type,
                         payload: step["payload"].clone(),
@@ -2222,9 +2309,9 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                         response_text: None,
                         requires_confirmation: false,
                     };
-                    
+
                     log::info!("Step {}: {:?}", i + 1, step_action_type);
-                    
+
                     // Execute and continue regardless of result
                     match Box::pin(execute_action_internal(&step_result, state)).await {
                         Ok(_) => {
@@ -2235,7 +2322,7 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                             errors.push(format!("Step {} failed: {}", i + 1, e));
                         }
                     }
-                    
+
                     // Small delay between steps
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
@@ -2268,185 +2355,337 @@ async fn execute_action_internal(action: &ActionResult, state: &State<'_, AppSta
                 })
             }
         }
-        
-        ActionType::NoAction => {
-            Ok(CommandResult {
-                success: true,
-                message: "No action required".to_string(),
-                output: None,
-            })
-        }
-        
-        ActionType::KeyboardShortcut => {
-            execute_keyboard_shortcut(action).await
-        }
-        
-        ActionType::WindowControl => {
-            execute_window_control(action).await
+
+        ActionType::NoAction => Ok(CommandResult {
+            success: true,
+            message: "No action required".to_string(),
+            output: None,
+        }),
+
+        ActionType::KeyboardShortcut => execute_keyboard_shortcut(action).await,
+
+        ActionType::WindowControl => execute_window_control(action).await,
+    }
+}
+
+fn update_delivery_state(
+    state: Option<&State<'_, AppState>>,
+    update: impl FnOnce(&mut crate::DeliveryState),
+) {
+    if let Some(state) = state {
+        if let Ok(mut delivery) = state.delivery.lock() {
+            update(&mut delivery);
         }
     }
+}
+
+fn restore_previous_clipboard(
+    clipboard: &mut arboard::Clipboard,
+    previous_content: Option<&String>,
+) {
+    if let Some(previous_content) = previous_content {
+        let _ = clipboard.set_text(previous_content);
+    }
+}
+
+fn set_clipboard_text(clipboard: &mut arboard::Clipboard, text: &str) -> Result<(), String> {
+    for attempt in 1..=3 {
+        match clipboard.set_text(text) {
+            Ok(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(8));
+                if clipboard
+                    .get_text()
+                    .map(|current| current == text)
+                    .unwrap_or(false)
+                {
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                log::warn!("Clipboard set failed on attempt {}: {}", attempt, err);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    Err("Failed to set clipboard for text delivery".to_string())
+}
+
+fn perform_delivery_strategy(strategy: DeliveryStrategy, text: &str) -> Result<(), String> {
+    use enigo::{Enigo, Key, Keyboard, Settings};
+
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to create input injector: {}", e))?;
+
+    match strategy {
+        DeliveryStrategy::CtrlV => {
+            #[cfg(target_os = "macos")]
+            let modifiers = [Key::Meta];
+            #[cfg(not(target_os = "macos"))]
+            let modifiers = [Key::Control];
+            send_hotkey(&mut enigo, &modifiers, Key::Unicode('v'))
+        }
+        DeliveryStrategy::CtrlShiftV => {
+            #[cfg(target_os = "macos")]
+            let modifiers = [Key::Meta, Key::Shift];
+            #[cfg(not(target_os = "macos"))]
+            let modifiers = [Key::Control, Key::Shift];
+            send_hotkey(&mut enigo, &modifiers, Key::Unicode('v'))
+        }
+        DeliveryStrategy::ShiftInsert => send_hotkey(&mut enigo, &[Key::Shift], Key::Insert),
+        DeliveryStrategy::SimulatedTyping => enigo
+            .text(text)
+            .map_err(|e| format!("Failed to simulate typing: {}", e)),
+    }
+}
+
+fn send_hotkey(
+    enigo: &mut enigo::Enigo,
+    modifiers: &[enigo::Key],
+    final_key: enigo::Key,
+) -> Result<(), String> {
+    use enigo::{Direction, Keyboard};
+
+    for modifier in modifiers {
+        enigo
+            .key(*modifier, Direction::Press)
+            .map_err(|e| format!("Failed to press modifier key: {}", e))?;
+        std::thread::sleep(std::time::Duration::from_millis(14));
+    }
+
+    enigo
+        .key(final_key, Direction::Click)
+        .map_err(|e| format!("Failed to press delivery key: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(18));
+
+    for modifier in modifiers.iter().rev() {
+        enigo
+            .key(*modifier, Direction::Release)
+            .map_err(|e| format!("Failed to release modifier key: {}", e))?;
+    }
+
+    Ok(())
+}
+
+async fn type_text_internal(
+    state: Option<&State<'_, AppState>>,
+    text: String,
+) -> Result<CommandResult, String> {
+    use arboard::Clipboard;
+
+    if text.trim().is_empty() {
+        return Err("No text to type".to_string());
+    }
+
+    update_delivery_state(state, |delivery| delivery.begin(&text));
+
+    // Let the previous hotkey release/focus transition settle first.
+    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+
+    let before = capture_surface_snapshot(4096);
+    let surface = before.classify();
+    let target_label = before
+        .target_label
+        .clone()
+        .or_else(|| before.window_title.clone())
+        .or_else(|| before.process_name.clone());
+    let target_name = target_label
+        .clone()
+        .unwrap_or_else(|| "focused application".to_string());
+
+    update_delivery_state(state, |delivery| {
+        delivery.update(
+            DeliveryPhase::Preparing,
+            surface,
+            target_label.clone(),
+            None,
+            0,
+            format!("Targeting {}", target_name.clone()),
+            false,
+        );
+    });
+
+    let strategies = strategy_chain(surface, &before, &text);
+    let mut clipboard = Clipboard::new().ok();
+    let previous_clipboard = clipboard
+        .as_mut()
+        .and_then(|clipboard| clipboard.get_text().ok());
+
+    let mut last_error: Option<String> = None;
+    let mut last_result: Option<CommandResult> = None;
+
+    for (index, strategy) in strategies.iter().enumerate() {
+        let attempt = (index + 1) as u8;
+        let phase = if attempt > 1 {
+            DeliveryPhase::Retrying
+        } else {
+            DeliveryPhase::Injecting
+        };
+
+        update_delivery_state(state, |delivery| {
+            delivery.update(
+                phase,
+                surface,
+                target_label.clone(),
+                Some(*strategy),
+                attempt,
+                format!("Trying {} for {}", strategy.label(), target_name.clone()),
+                false,
+            );
+        });
+
+        if !matches!(strategy, DeliveryStrategy::SimulatedTyping) {
+            let Some(clipboard) = clipboard.as_mut() else {
+                last_error = Some("Clipboard is unavailable for paste delivery".to_string());
+                continue;
+            };
+            if let Err(err) = set_clipboard_text(clipboard, &text) {
+                last_error = Some(err);
+                continue;
+            }
+        }
+
+        if let Err(err) = perform_delivery_strategy(*strategy, &text) {
+            last_error = Some(err);
+            continue;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        update_delivery_state(state, |delivery| {
+            delivery.update(
+                DeliveryPhase::Verifying,
+                surface,
+                target_label.clone(),
+                Some(*strategy),
+                attempt,
+                format!("Verifying {} delivery", strategy.label()),
+                false,
+            );
+        });
+
+        let after = capture_surface_snapshot(4096);
+        let verified = verify_inserted_text(&before, &after, &text);
+        let readback_unavailable = !before.supports_readback() || !after.supports_readback();
+
+        if verified || readback_unavailable {
+            if let Some(clipboard) = clipboard.as_mut() {
+                restore_previous_clipboard(clipboard, previous_clipboard.as_ref());
+            }
+
+            let message = if verified {
+                format!(
+                    "Delivered text to {} via {}",
+                    target_name.clone(),
+                    strategy.label()
+                )
+            } else {
+                format!(
+                    "Delivered text to {} via {} (unverified)",
+                    target_name.clone(),
+                    strategy.label()
+                )
+            };
+
+            update_delivery_state(state, |delivery| {
+                delivery.update(
+                    DeliveryPhase::Succeeded,
+                    surface,
+                    target_label.clone(),
+                    Some(*strategy),
+                    attempt,
+                    message.clone(),
+                    false,
+                );
+            });
+
+            last_result = Some(CommandResult {
+                success: true,
+                message,
+                output: None,
+            });
+            break;
+        }
+
+        last_error = Some(format!(
+            "{} did not change the focused input for {}",
+            strategy.label(),
+            target_name.clone()
+        ));
+    }
+
+    if let Some(result) = last_result {
+        return Ok(result);
+    }
+
+    let recovered_to_clipboard = clipboard
+        .as_mut()
+        .map(|clipboard| clipboard.set_text(&text).is_ok())
+        .unwrap_or(false);
+
+    let failure_message = if recovered_to_clipboard {
+        format!(
+            "Failed to deliver text to {}. Transcript was copied to the clipboard for recovery.",
+            target_name.clone()
+        )
+    } else {
+        format!(
+            "Failed to deliver text to {}. Transcript was kept in the recovery buffer.",
+            target_name.clone()
+        )
+    };
+
+    update_delivery_state(state, |delivery| {
+        delivery.store_failure(
+            text.clone(),
+            failure_message.clone(),
+            recovered_to_clipboard,
+        );
+        delivery.update(
+            DeliveryPhase::RecoverableFailure,
+            surface,
+            target_label.clone(),
+            strategies.last().copied(),
+            strategies.len() as u8,
+            failure_message.clone(),
+            recovered_to_clipboard,
+        );
+    });
+
+    Err(match last_error {
+        Some(last_error) => format!("{failure_message} {last_error}"),
+        None => failure_message,
+    })
 }
 
 /// Type text into the active window
 #[tauri::command]
-pub async fn type_text(text: String) -> Result<CommandResult, String> {
-    type_text_internal(text).await
-}
-
-async fn type_text_internal(text: String) -> Result<CommandResult, String> {
-    use enigo::{Enigo, Keyboard, Settings};
-    use arboard::Clipboard;
-    
-    if text.is_empty() {
-        return Err("No text to type".to_string());
-    }
-    
-    log::info!("type_text_internal: Starting to type {} chars", text.len());
-    
-    // Short delay for focus to settle after Ctrl+Space release
-    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
-    
-    // Use clipboard + Ctrl+V for reliable pasting (more reliable than enigo.text())
-    let mut clipboard = Clipboard::new()
-        .map_err(|e| format!("Failed to access clipboard: {}", e))?;
-    
-    // Save current clipboard content to restore later
-    let previous_content = clipboard.get_text().ok();
-    log::info!("type_text_internal: Saved previous clipboard content");
-    
-    // Set our text to clipboard with retry
-    let mut set_success = false;
-    for attempt in 1..=3 {
-        match clipboard.set_text(&text) {
-            Ok(_) => {
-                // Verify the clipboard was actually set
-                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-                if let Ok(current) = clipboard.get_text() {
-                    if current == text {
-                        set_success = true;
-                        log::info!("type_text_internal: Clipboard set successfully on attempt {}", attempt);
-                        break;
-                    }
-                }
-                log::warn!("type_text_internal: Clipboard verification failed on attempt {}", attempt);
-            }
-            Err(e) => {
-                log::warn!("type_text_internal: Failed to set clipboard on attempt {}: {}", attempt, e);
-            }
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-    }
-    
-    if !set_success {
-        return Err("Failed to set clipboard after 3 attempts".to_string());
-    }
-    
-    // Additional delay for clipboard to be fully ready
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-    
-    // Simulate Ctrl+V to paste with retry
-    let mut paste_success = false;
-    for attempt in 1..=2 {
-        match paste_with_enigo() {
-            Ok(_) => {
-                paste_success = true;
-                log::info!("type_text_internal: Paste successful on attempt {}", attempt);
-                break;
-            }
-            Err(e) => {
-                log::warn!("type_text_internal: Paste failed on attempt {}: {}", attempt, e);
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            }
-        }
-    }
-    
-    if !paste_success {
-        // Fallback: try character-by-character typing for short text
-        if text.len() <= 100 {
-            log::info!("type_text_internal: Falling back to character-by-character typing");
-            if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-                if enigo.text(&text).is_ok() {
-                    paste_success = true;
-                }
-            }
-        }
-    }
-    
-    // Restore previous clipboard content after a brief delay
-    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
-    if let Some(prev) = previous_content {
-        let _ = clipboard.set_text(&prev);
-        log::info!("type_text_internal: Restored previous clipboard content");
-    }
-    
-    if paste_success {
-        log::info!("type_text_internal: Successfully typed text");
-        Ok(CommandResult {
-            success: true,
-            message: format!("Typed: {}", if text.len() > 50 { format!("{}...", &text[..50]) } else { text }),
-            output: None,
-        })
-    } else {
-        Err("Failed to paste text into the focused application".to_string())
-    }
-}
-
-/// Helper function to perform Ctrl+V (Windows/Linux) or Cmd+V (macOS) paste
-fn paste_with_enigo() -> Result<(), String> {
-    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
-    
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("Failed to create enigo: {}", e))?;
-    
-    // Use Cmd on macOS, Ctrl on Windows/Linux
-    #[cfg(target_os = "macos")]
-    let modifier = Key::Meta;
-    #[cfg(not(target_os = "macos"))]
-    let modifier = Key::Control;
-    
-    // Press modifier key
-    enigo.key(modifier, Direction::Press)
-        .map_err(|e| format!("Failed to press modifier: {}", e))?;
-    
-    // Small delay between key presses
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    
-    // Press and release V
-    enigo.key(Key::Unicode('v'), Direction::Click)
-        .map_err(|e| format!("Failed to press V: {}", e))?;
-    
-    // Small delay before releasing
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    
-    // Release modifier key
-    enigo.key(modifier, Direction::Release)
-        .map_err(|e| format!("Failed to release modifier: {}", e))?;
-    
-    Ok(())
+pub async fn type_text(state: State<'_, AppState>, text: String) -> Result<CommandResult, String> {
+    type_text_internal(Some(&state), text).await
 }
 
 /// Run a system command
 #[tauri::command]
 pub async fn run_system_command(command: String) -> Result<CommandResult, String> {
     use std::process::Command;
-    
+
     log::info!("Running: {}", command);
-    
+
     #[cfg(windows)]
     let output = Command::new("cmd")
         .args(["/C", &command])
         .output()
         .map_err(|e| format!("Failed: {}", e))?;
-    
+
     #[cfg(not(windows))]
     let output = Command::new("sh")
         .args(["-c", &command])
         .output()
         .map_err(|e| format!("Failed: {}", e))?;
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    
+
     if output.status.success() {
         Ok(CommandResult {
             success: true,
@@ -2463,50 +2702,46 @@ pub async fn run_system_command(command: String) -> Result<CommandResult, String
 /// Get the primary modifier key for the current platform (Cmd on macOS, Ctrl elsewhere)
 fn get_primary_modifier() -> enigo::Key {
     #[cfg(target_os = "macos")]
-    { enigo::Key::Meta }
+    {
+        enigo::Key::Meta
+    }
     #[cfg(not(target_os = "macos"))]
-    { enigo::Key::Control }
+    {
+        enigo::Key::Control
+    }
 }
 
 /// Execute a keyboard shortcut (copy, paste, undo, etc.)
 async fn execute_keyboard_shortcut(action: &ActionResult) -> Result<CommandResult, String> {
-    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
-    
-    let shortcut = action.payload.get("shortcut")
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    let shortcut = action
+        .payload
+        .get("shortcut")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    
+
     if shortcut.is_empty() {
         return Err("No shortcut specified".to_string());
     }
-    
+
     log::info!("Executing keyboard shortcut: {}", shortcut);
-    
+
     // Small delay to ensure focus is on the right window
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("Failed to create enigo: {}", e))?;
-    
+
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| format!("Failed to create enigo: {}", e))?;
+
     // Use Cmd on macOS, Ctrl on Windows/Linux
     let modifier = get_primary_modifier();
-    
+
     let result = match shortcut {
-        "copy" => {
-            send_key_combo(&mut enigo, &[modifier], 'c')
-        }
-        "paste" => {
-            send_key_combo(&mut enigo, &[modifier], 'v')
-        }
-        "cut" => {
-            send_key_combo(&mut enigo, &[modifier], 'x')
-        }
-        "select_all" => {
-            send_key_combo(&mut enigo, &[modifier], 'a')
-        }
-        "undo" => {
-            send_key_combo(&mut enigo, &[modifier], 'z')
-        }
+        "copy" => send_key_combo(&mut enigo, &[modifier], 'c'),
+        "paste" => send_key_combo(&mut enigo, &[modifier], 'v'),
+        "cut" => send_key_combo(&mut enigo, &[modifier], 'x'),
+        "select_all" => send_key_combo(&mut enigo, &[modifier], 'a'),
+        "undo" => send_key_combo(&mut enigo, &[modifier], 'z'),
         "redo" => {
             // Cmd+Shift+Z on macOS, Ctrl+Y on Windows
             #[cfg(target_os = "macos")]
@@ -2525,24 +2760,12 @@ async fn execute_keyboard_shortcut(action: &ActionResult) -> Result<CommandResul
                 send_key_combo(&mut enigo, &[Key::Control], 'y')
             }
         }
-        "save" => {
-            send_key_combo(&mut enigo, &[modifier], 's')
-        }
-        "find" => {
-            send_key_combo(&mut enigo, &[modifier], 'f')
-        }
-        "new_tab" => {
-            send_key_combo(&mut enigo, &[modifier], 't')
-        }
-        "close_tab" => {
-            send_key_combo(&mut enigo, &[modifier], 'w')
-        }
-        "new_window" => {
-            send_key_combo(&mut enigo, &[modifier], 'n')
-        }
-        "refresh" => {
-            send_key_combo(&mut enigo, &[modifier], 'r')
-        }
+        "save" => send_key_combo(&mut enigo, &[modifier], 's'),
+        "find" => send_key_combo(&mut enigo, &[modifier], 'f'),
+        "new_tab" => send_key_combo(&mut enigo, &[modifier], 't'),
+        "close_tab" => send_key_combo(&mut enigo, &[modifier], 'w'),
+        "new_window" => send_key_combo(&mut enigo, &[modifier], 'n'),
+        "refresh" => send_key_combo(&mut enigo, &[modifier], 'r'),
         "back" => {
             // Cmd+[ on macOS, Alt+Left on Windows
             #[cfg(target_os = "macos")]
@@ -2577,7 +2800,7 @@ async fn execute_keyboard_shortcut(action: &ActionResult) -> Result<CommandResul
         }
         _ => Err(format!("Unknown shortcut: {}", shortcut)),
     };
-    
+
     match result {
         Ok(()) => Ok(CommandResult {
             success: true,
@@ -2589,28 +2812,35 @@ async fn execute_keyboard_shortcut(action: &ActionResult) -> Result<CommandResul
 }
 
 /// Helper to send a key combo like Ctrl+C
-fn send_key_combo(enigo: &mut enigo::Enigo, modifiers: &[enigo::Key], key: char) -> Result<(), String> {
-    use enigo::{Keyboard, Key, Direction};
-    
+fn send_key_combo(
+    enigo: &mut enigo::Enigo,
+    modifiers: &[enigo::Key],
+    key: char,
+) -> Result<(), String> {
+    use enigo::{Direction, Key, Keyboard};
+
     // Press modifiers
     for modifier in modifiers {
-        enigo.key(*modifier, Direction::Press)
+        enigo
+            .key(*modifier, Direction::Press)
             .map_err(|e| format!("Failed to press modifier: {}", e))?;
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    
+
     // Press and release the key
-    enigo.key(Key::Unicode(key), Direction::Click)
+    enigo
+        .key(Key::Unicode(key), Direction::Click)
         .map_err(|e| format!("Failed to press key: {}", e))?;
-    
+
     std::thread::sleep(std::time::Duration::from_millis(20));
-    
+
     // Release modifiers in reverse order
     for modifier in modifiers.iter().rev() {
-        enigo.key(*modifier, Direction::Release)
+        enigo
+            .key(*modifier, Direction::Release)
             .map_err(|e| format!("Failed to release modifier: {}", e))?;
     }
-    
+
     Ok(())
 }
 
@@ -2618,24 +2848,26 @@ fn send_key_combo(enigo: &mut enigo::Enigo, modifiers: &[enigo::Key], key: char)
 
 /// Execute window control commands (minimize, maximize, close, etc.)
 async fn execute_window_control(action: &ActionResult) -> Result<CommandResult, String> {
-    use enigo::{Enigo, Keyboard, Key, Settings, Direction};
-    
-    let window_action = action.payload.get("action")
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    let window_action = action
+        .payload
+        .get("action")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    
+
     if window_action.is_empty() {
         return Err("No window action specified".to_string());
     }
-    
+
     log::info!("Executing window control: {}", window_action);
-    
+
     // Small delay to ensure focus is on the right window
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("Failed to create enigo: {}", e))?;
-    
+
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| format!("Failed to create enigo: {}", e))?;
+
     let result = match window_action {
         "minimize" => {
             // Win+Down (minimize)
@@ -2817,7 +3049,7 @@ async fn execute_window_control(action: &ActionResult) -> Result<CommandResult, 
         }
         _ => Err(format!("Unknown window action: {}", window_action)),
     };
-    
+
     match result {
         Ok(()) => Ok(CommandResult {
             success: true,
@@ -2830,7 +3062,10 @@ async fn execute_window_control(action: &ActionResult) -> Result<CommandResult, 
 
 // ============ Clipboard Action Helpers ============
 
-async fn execute_clipboard_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+async fn execute_clipboard_action(
+    action: &ActionResult,
+    state: &State<'_, AppState>,
+) -> Result<CommandResult, String> {
     // Get current clipboard content
     let content = {
         let clipboard = state.clipboard.lock().await;
@@ -2855,7 +3090,9 @@ async fn execute_clipboard_action(action: &ActionResult, state: &State<'_, AppSt
 
     // Process with local clipboard transformer
     let client = VoiceClient::new();
-    let result = client.process_clipboard(&content, operation, &action.payload).await?;
+    let result = client
+        .process_clipboard(&content, operation, &action.payload)
+        .await?;
 
     // Set the result back to clipboard
     {
@@ -2872,15 +3109,20 @@ async fn execute_clipboard_action(action: &ActionResult, state: &State<'_, AppSt
 
 // ============ Integration Action Helpers ============
 
-async fn execute_spotify_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+async fn execute_spotify_action(
+    action: &ActionResult,
+    state: &State<'_, AppState>,
+) -> Result<CommandResult, String> {
     let integrations = state.integrations.lock().await;
-    
-    let spotify_action = action.payload.get("action")
+
+    let spotify_action = action
+        .payload
+        .get("action")
         .and_then(|v| v.as_str())
         .unwrap_or("play_pause");
-    
+
     let spotify_action_id = format!("spotify_{}", spotify_action);
-    
+
     match integrations.execute("spotify", &spotify_action_id, &action.payload) {
         Ok(result) => Ok(CommandResult {
             success: result.success,
@@ -2891,15 +3133,20 @@ async fn execute_spotify_action(action: &ActionResult, state: &State<'_, AppStat
     }
 }
 
-async fn execute_discord_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+async fn execute_discord_action(
+    action: &ActionResult,
+    state: &State<'_, AppState>,
+) -> Result<CommandResult, String> {
     let integrations = state.integrations.lock().await;
-    
-    let discord_action = action.payload.get("action")
+
+    let discord_action = action
+        .payload
+        .get("action")
         .and_then(|v| v.as_str())
         .unwrap_or("mute");
-    
+
     let discord_action_id = format!("discord_{}", discord_action);
-    
+
     match integrations.execute("discord", &discord_action_id, &action.payload) {
         Ok(result) => Ok(CommandResult {
             success: result.success,
@@ -2910,15 +3157,20 @@ async fn execute_discord_action(action: &ActionResult, state: &State<'_, AppStat
     }
 }
 
-async fn execute_system_action(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+async fn execute_system_action(
+    action: &ActionResult,
+    state: &State<'_, AppState>,
+) -> Result<CommandResult, String> {
     let integrations = state.integrations.lock().await;
-    
-    let system_action = action.payload.get("action")
+
+    let system_action = action
+        .payload
+        .get("action")
         .and_then(|v| v.as_str())
         .unwrap_or("lock");
-    
+
     let system_action_id = format!("system_{}", system_action);
-    
+
     match integrations.execute("system", &system_action_id, &action.payload) {
         Ok(result) => Ok(CommandResult {
             success: result.success,
@@ -2931,20 +3183,25 @@ async fn execute_system_action(action: &ActionResult, state: &State<'_, AppState
 
 // ============ Custom Command Execution ============
 
-async fn execute_custom_command(action: &ActionResult, state: &State<'_, AppState>) -> Result<CommandResult, String> {
+async fn execute_custom_command(
+    action: &ActionResult,
+    state: &State<'_, AppState>,
+) -> Result<CommandResult, String> {
     // Get command ID from payload
-    let command_id = action.payload.get("command_id")
+    let command_id = action.payload.get("command_id").and_then(|v| v.as_str());
+
+    let trigger_phrase = action
+        .payload
+        .get("trigger_phrase")
         .and_then(|v| v.as_str());
-    
-    let trigger_phrase = action.payload.get("trigger_phrase")
-        .and_then(|v| v.as_str());
-    
+
     // Load custom commands store
     let store = custom::CustomCommandsStore::new()?;
-    
+
     // Find the command either by ID or trigger phrase
     let command = if let Some(id) = command_id {
-        store.get_all_commands()?
+        store
+            .get_all_commands()?
             .into_iter()
             .find(|c| c.id == id && c.enabled)
     } else if let Some(trigger) = trigger_phrase {
@@ -2952,26 +3209,36 @@ async fn execute_custom_command(action: &ActionResult, state: &State<'_, AppStat
     } else {
         return Err("No command ID or trigger phrase provided".to_string());
     };
-    
+
     let command = match command {
         Some(cmd) => cmd,
         None => return Err("Custom command not found or disabled".to_string()),
     };
-    
-    log::info!("Executing custom command: {} ({})", command.name, command.id);
-    
+
+    log::info!(
+        "Executing custom command: {} ({})",
+        command.name,
+        command.id
+    );
+
     // Execute each action step in sequence
     let mut success_count = 0;
     let total_steps = command.actions.len();
-    
+
     for (i, step) in command.actions.iter().enumerate() {
-        log::info!("Step {}/{}: {} - {:?}", i + 1, total_steps, step.action_type, step.payload);
-        
+        log::info!(
+            "Step {}/{}: {} - {:?}",
+            i + 1,
+            total_steps,
+            step.action_type,
+            step.payload
+        );
+
         // Apply delay before step (except for first step)
         if step.delay_ms > 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(step.delay_ms as u64)).await;
         }
-        
+
         // Map action_type string to ActionType enum and execute
         let step_action_type = match step.action_type.as_str() {
             "open_app" => ActionType::OpenApp,
@@ -2984,41 +3251,56 @@ async fn execute_custom_command(action: &ActionResult, state: &State<'_, AppStat
             "discord_control" => ActionType::DiscordControl,
             "system_control" => ActionType::SystemControl,
             _ => {
-                log::warn!("Unknown action type in custom command: {}", step.action_type);
+                log::warn!(
+                    "Unknown action type in custom command: {}",
+                    step.action_type
+                );
                 continue;
             }
         };
-        
+
         let step_result = ActionResult {
             action_type: step_action_type,
             payload: step.payload.clone(),
-            refined_text: step.payload.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            refined_text: step
+                .payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             response_text: None,
             requires_confirmation: false,
         };
-        
+
         // Execute the step (recursively call execute_action_internal)
         match Box::pin(execute_action_internal(&step_result, state)).await {
             Ok(result) => {
                 if result.success {
                     success_count += 1;
                 }
-                log::info!("Step {}/{} completed: {}", i + 1, total_steps, result.message);
+                log::info!(
+                    "Step {}/{} completed: {}",
+                    i + 1,
+                    total_steps,
+                    result.message
+                );
             }
             Err(e) => {
                 log::warn!("Step {}/{} failed: {}", i + 1, total_steps, e);
             }
         }
     }
-    
+
     // Record usage
     if let Err(e) = store.record_usage(&command.id) {
         log::warn!("Failed to record command usage: {}", e);
     }
-    
+
     Ok(CommandResult {
         success: success_count > 0,
-        message: format!("Executed '{}': {}/{} steps completed", command.name, success_count, total_steps),
+        message: format!(
+            "Executed '{}': {}/{} steps completed",
+            command.name, success_count, total_steps
+        ),
         output: None,
     })
 }
@@ -3027,7 +3309,9 @@ async fn execute_custom_command(action: &ActionResult, state: &State<'_, AppStat
 
 /// Get conversation history
 #[tauri::command]
-pub async fn get_conversation(state: State<'_, AppState>) -> Result<Vec<crate::conversation::Message>, String> {
+pub async fn get_conversation(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::conversation::Message>, String> {
     let conversation = state.conversation.lock().await;
     Ok(conversation.messages.clone())
 }
@@ -3044,14 +3328,14 @@ pub async fn clear_conversation(state: State<'_, AppState>) -> Result<(), String
 #[tauri::command]
 pub async fn new_conversation_session(state: State<'_, AppState>) -> Result<String, String> {
     let mut conversation = state.conversation.lock().await;
-    
+
     // Save current session
     if let Ok(store_guard) = state.conversation_store.lock() {
         if let Some(ref store) = *store_guard {
             let _ = store.save_session(&conversation);
         }
     }
-    
+
     // Create new session
     *conversation = crate::conversation::ConversationMemory::new_session();
     Ok(conversation.session_id.clone())
@@ -3075,7 +3359,10 @@ pub async fn set_clipboard(state: State<'_, AppState>, content: String) -> Resul
 
 /// Get clipboard history
 #[tauri::command]
-pub async fn get_clipboard_history(state: State<'_, AppState>, limit: Option<usize>) -> Result<Vec<crate::clipboard::ClipboardEntry>, String> {
+pub async fn get_clipboard_history(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::clipboard::ClipboardEntry>, String> {
     let clipboard = state.clipboard.lock().await;
     Ok(clipboard.get_history(limit.unwrap_or(20)))
 }
@@ -3084,7 +3371,9 @@ pub async fn get_clipboard_history(state: State<'_, AppState>, limit: Option<usi
 
 /// Get list of available integrations
 #[tauri::command]
-pub async fn get_integrations(state: State<'_, AppState>) -> Result<Vec<crate::integrations::IntegrationInfo>, String> {
+pub async fn get_integrations(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::integrations::IntegrationInfo>, String> {
     let integrations = state.integrations.lock().await;
     Ok(integrations.list_integrations())
 }
@@ -3111,7 +3400,7 @@ pub async fn set_voice_context(
     mode: String,
 ) -> Result<bool, String> {
     let mut context = state.current_context.lock().await;
-    
+
     context.active_app = active_app;
     context.selected_text = selected_text;
     context.mode = match mode.as_str() {
@@ -3119,7 +3408,7 @@ pub async fn set_voice_context(
         _ => VoiceMode::Dictation,
     };
     context.timestamp = chrono::Utc::now().to_rfc3339();
-    
+
     Ok(true)
 }
 
@@ -3176,7 +3465,9 @@ fn normalize_hotkey_string(raw: &str) -> Result<String, String> {
             } else {
                 let mut chars = token.chars();
                 match chars.next() {
-                    Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase()),
+                    Some(first) => {
+                        format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase())
+                    }
                     None => continue,
                 }
             };
@@ -3195,8 +3486,8 @@ fn normalize_hotkey_string(raw: &str) -> Result<String, String> {
 }
 
 fn apply_global_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
     use std::str::FromStr;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
     let normalized = normalize_hotkey_string(hotkey)?;
     let parsed = Shortcut::from_str(&normalized)
@@ -3226,12 +3517,16 @@ pub async fn set_config(
     config.vibe_coding = normalized_vibe_coding_config(&config.vibe_coding);
 
     let mut current_config = state.config.lock().await;
-    
+
     // Check if hotkey changed
     if current_config.trigger_hotkey != config.trigger_hotkey {
         let new_shortcut_str = config.trigger_hotkey.clone();
-        
-        log::info!("Updating hotkey from '{}' to '{}'", current_config.trigger_hotkey, new_shortcut_str);
+
+        log::info!(
+            "Updating hotkey from '{}' to '{}'",
+            current_config.trigger_hotkey,
+            new_shortcut_str
+        );
         apply_global_hotkey(&app, &new_shortcut_str)?;
     }
 
@@ -3270,7 +3565,9 @@ pub async fn get_language_preferences(
     state: State<'_, AppState>,
 ) -> Result<LanguagePreferences, String> {
     let config = state.config.lock().await;
-    Ok(normalized_language_preferences(&config.language_preferences))
+    Ok(normalized_language_preferences(
+        &config.language_preferences,
+    ))
 }
 
 #[tauri::command]
@@ -3316,9 +3613,9 @@ pub async fn set_vibe_coding_config(
     Ok(normalized)
 }
 
-fn sanitize_deepgram_api_key(raw: &str) -> String {
+fn sanitize_groq_api_key(raw: &str) -> String {
     let cleaned = raw.trim().to_string();
-    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("replace_with_deepgram_api_key") {
+    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("replace_with_groq_api_key") {
         String::new()
     } else {
         cleaned
@@ -3331,11 +3628,9 @@ pub async fn get_local_api_settings() -> Result<LocalApiSettings, String> {
 }
 
 #[tauri::command]
-pub async fn set_local_api_settings(
-    deepgram_api_key: String,
-) -> Result<LocalApiSettings, String> {
+pub async fn set_local_api_settings(groq_api_key: String) -> Result<LocalApiSettings, String> {
     let settings = LocalApiSettings {
-        deepgram_api_key: sanitize_deepgram_api_key(&deepgram_api_key),
+        groq_api_key: sanitize_groq_api_key(&groq_api_key),
     };
     settings.save_to_disk()?;
     Ok(settings)

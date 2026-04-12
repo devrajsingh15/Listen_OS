@@ -3,7 +3,7 @@
 //! Custom words and spellings for voice recognition.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -12,10 +12,10 @@ use std::sync::Mutex;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictionaryWord {
     pub id: String,
-    pub word: String,           // The correct spelling
+    pub word: String,             // The correct spelling
     pub phonetic: Option<String>, // How it sounds (optional)
-    pub category: String,        // "personal" or "shared"
-    pub is_auto_learned: bool,   // Was it learned automatically?
+    pub category: String,         // "personal" or "shared"
+    pub is_auto_learned: bool,    // Was it learned automatically?
     pub created_at: DateTime<Utc>,
     pub use_count: u32,
 }
@@ -43,29 +43,31 @@ impl DictionaryStore {
     /// Create or open the dictionary database
     pub fn new() -> Result<Self, String> {
         let db_path = Self::get_db_path()?;
-        
+
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create data directory: {}", e))?;
         }
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("Failed to open database: {}", e))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
-        let store = Self { conn: Mutex::new(conn) };
+        let store = Self {
+            conn: Mutex::new(conn),
+        };
         store.init_tables()?;
         Ok(store)
     }
 
     fn get_db_path() -> Result<PathBuf, String> {
-        let data_dir = dirs_next::data_dir()
-            .ok_or_else(|| "Could not find data directory".to_string())?;
+        let data_dir =
+            dirs_next::data_dir().ok_or_else(|| "Could not find data directory".to_string())?;
         Ok(data_dir.join("ListenOS").join("dictionary.db"))
     }
 
     fn init_tables(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS words (
@@ -80,8 +82,9 @@ impl DictionaryStore {
 
             CREATE INDEX IF NOT EXISTS idx_words_word ON words(word);
             CREATE INDEX IF NOT EXISTS idx_words_category ON words(category);
-            "
-        ).map_err(|e| format!("Failed to initialize tables: {}", e))?;
+            ",
+        )
+        .map_err(|e| format!("Failed to initialize tables: {}", e))?;
 
         Ok(())
     }
@@ -90,7 +93,7 @@ impl DictionaryStore {
     pub fn add_word(&self, word: String, is_auto_learned: bool) -> Result<DictionaryWord, String> {
         let dict_word = DictionaryWord::new(word, is_auto_learned);
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute(
             "INSERT OR REPLACE INTO words (id, word, phonetic, category, is_auto_learned, created_at, use_count) 
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -111,51 +114,64 @@ impl DictionaryStore {
     /// Get all dictionary words
     pub fn get_all_words(&self) -> Result<Vec<DictionaryWord>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
-        let mut stmt = conn.prepare(
-            "SELECT id, word, phonetic, category, is_auto_learned, created_at, use_count 
-             FROM words ORDER BY use_count DESC, word ASC"
-        ).map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
-        let words = stmt.query_map([], |row| {
-            Ok(DictionaryWord {
-                id: row.get(0)?,
-                word: row.get(1)?,
-                phonetic: row.get(2)?,
-                category: row.get(3)?,
-                is_auto_learned: row.get::<_, i32>(4)? != 0,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                use_count: row.get(6)?,
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, word, phonetic, category, is_auto_learned, created_at, use_count 
+             FROM words ORDER BY use_count DESC, word ASC",
+            )
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+
+        let words = stmt
+            .query_map([], |row| {
+                Ok(DictionaryWord {
+                    id: row.get(0)?,
+                    word: row.get(1)?,
+                    phonetic: row.get(2)?,
+                    category: row.get(3)?,
+                    is_auto_learned: row.get::<_, i32>(4)? != 0,
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    use_count: row.get(6)?,
+                })
             })
-        }).map_err(|e| format!("Failed to query words: {}", e))?;
+            .map_err(|e| format!("Failed to query words: {}", e))?;
 
-        words.collect::<Result<Vec<_>, _>>()
+        words
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to collect words: {}", e))
     }
 
     /// Check if a word exists in dictionary
     pub fn word_exists(&self, word: &str) -> Result<bool, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
-        let count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM words WHERE LOWER(word) = LOWER(?1)",
-            [word],
-            |row| row.get(0),
-        ).map_err(|e| format!("Failed to check word: {}", e))?;
+
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM words WHERE LOWER(word) = LOWER(?1)",
+                [word],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to check word: {}", e))?;
 
         Ok(count > 0)
     }
 
     /// Update a word
-    pub fn update_word(&self, id: &str, word: String, phonetic: Option<String>) -> Result<(), String> {
+    pub fn update_word(
+        &self,
+        id: &str,
+        word: String,
+        phonetic: Option<String>,
+    ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute(
             "UPDATE words SET word = ?1, phonetic = ?2 WHERE id = ?3",
             params![word, phonetic, id],
-        ).map_err(|e| format!("Failed to update word: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to update word: {}", e))?;
 
         Ok(())
     }
@@ -163,11 +179,12 @@ impl DictionaryStore {
     /// Record word usage
     pub fn record_usage(&self, word: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute(
             "UPDATE words SET use_count = use_count + 1 WHERE LOWER(word) = LOWER(?1)",
             [word],
-        ).map_err(|e| format!("Failed to record usage: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to record usage: {}", e))?;
 
         Ok(())
     }
@@ -175,7 +192,7 @@ impl DictionaryStore {
     /// Delete a word
     pub fn delete_word(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute("DELETE FROM words WHERE id = ?1", [id])
             .map_err(|e| format!("Failed to delete word: {}", e))?;
 
@@ -185,15 +202,17 @@ impl DictionaryStore {
     /// Get all words for voice recognition context
     pub fn get_words_for_recognition(&self) -> Result<Vec<String>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
-        let mut stmt = conn.prepare("SELECT word FROM words ORDER BY use_count DESC")
+
+        let mut stmt = conn
+            .prepare("SELECT word FROM words ORDER BY use_count DESC")
             .map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
-        let words = stmt.query_map([], |row| row.get(0))
+        let words = stmt
+            .query_map([], |row| row.get(0))
             .map_err(|e| format!("Failed to query words: {}", e))?;
 
-        words.collect::<Result<Vec<_>, _>>()
+        words
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to collect words: {}", e))
     }
 }
-

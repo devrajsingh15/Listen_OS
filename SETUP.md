@@ -24,7 +24,7 @@ npm install
 Copy `.env.example` to `.env.local` and set your key:
 
 ```env
-DEEPGRAM_API_KEY=your_deepgram_api_key
+GROQ_API_KEY=your_groq_api_key
 LISTENOS_REQUIRE_CONFIRMATION=false
 ```
 

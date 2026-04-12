@@ -1,47 +1,51 @@
 //! ListenOS - AI-Powered Voice Control System
-//! 
+//!
 //! Dual-window architecture:
 //! - Dashboard: Main app for settings, stats, and AI management
 //! - Assistant: Always-running overlay that appears on hotkey press
 
-mod audio;
-mod commands;
 mod ai;
-mod system;
-mod config;
-mod cloud;
-mod streaming;
-mod conversation;
+mod audio;
 mod clipboard;
+mod cloud;
+mod commands;
+mod config;
+mod conversation;
+mod correction;
+mod delivery;
+mod dictionary;
+mod error_log;
 mod integrations;
 mod notes;
 mod snippets;
-mod dictionary;
-mod correction;
-mod error_log;
+mod streaming;
+mod system;
 
+use std::sync::Arc;
 use tauri::{
-    Emitter, Manager, AppHandle, PhysicalPosition, Position,
-    tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent},
     menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager, PhysicalPosition, Position,
 };
 use tauri_plugin_global_shortcut::ShortcutState;
-use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub use audio::AudioState;
+pub use clipboard::ClipboardService;
+pub use cloud::{VoiceContext, VoiceMode};
 pub use commands::*;
 pub use config::AppConfig;
-pub use cloud::{VoiceContext, VoiceMode};
-pub use streaming::{AudioStreamer, AudioAccumulator, SAMPLE_RATE};
-pub use conversation::{ConversationMemory, ConversationStore, Message, Role, Fact};
-pub use clipboard::ClipboardService;
-pub use integrations::{IntegrationManager, AppIntegration};
+pub use conversation::{ConversationMemory, ConversationStore, Fact, Message, Role};
+pub use correction::CorrectionTracker;
+pub use delivery::{DeliveryPhase, DeliveryState, DeliveryStatusSnapshot, TargetSurfaceKind};
+pub use dictionary::{DictionaryStore, DictionaryWord};
+pub use error_log::{ErrorEntry, ErrorLog, ErrorType};
+pub use integrations::{AppIntegration, IntegrationManager};
 pub use notes::{Note, NotesStore};
 pub use snippets::{Snippet, SnippetsStore};
-pub use dictionary::{DictionaryWord, DictionaryStore};
-pub use correction::CorrectionTracker;
-pub use error_log::{ErrorLog, ErrorEntry, ErrorType};
+pub use streaming::{
+    AudioAccumulator, AudioHealthPhase, AudioRuntimeStatus, AudioStreamer, SAMPLE_RATE,
+};
 
 fn center_assistant_horizontally(app: &tauri::AppHandle) {
     if let Some(assistant) = app.get_webview_window("assistant") {
@@ -60,10 +64,8 @@ fn center_assistant_horizontally(app: &tauri::AppHandle) {
             let centered_x = monitor_pos.x + ((monitor_size.width as i32 - window_width) / 2);
             let top_y = monitor_pos.y + 10;
 
-            let _ = assistant.set_position(Position::Physical(PhysicalPosition::new(
-                centered_x,
-                top_y,
-            )));
+            let _ = assistant
+                .set_position(Position::Physical(PhysicalPosition::new(centered_x, top_y)));
         }
     }
 }
@@ -91,13 +93,14 @@ pub struct AppState {
     pub error_log: Arc<Mutex<ErrorLog>>,
     // Pending high-risk action awaiting explicit user confirmation
     pub pending_action: Arc<Mutex<Option<commands::PendingAction>>>,
+    pub delivery: Arc<std::sync::Mutex<DeliveryState>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         // Initialize conversation store (may fail, that's ok)
         let conversation_store = ConversationStore::new().ok();
-        
+
         // Load facts from store if available
         let mut conversation = ConversationMemory::new_session();
         if let Some(ref store) = conversation_store {
@@ -130,6 +133,7 @@ impl Default for AppState {
             correction_tracker: Arc::new(Mutex::new(CorrectionTracker::new())),
             error_log: Arc::new(Mutex::new(ErrorLog::new())),
             pending_action: Arc::new(Mutex::new(None)),
+            delivery: Arc::new(std::sync::Mutex::new(DeliveryState::new())),
         }
     }
 }
@@ -142,13 +146,13 @@ pub fn run() {
     if env_path.exists() {
         let _ = dotenvy::from_path(&env_path);
     }
-    
+
     let _ = env_logger::try_init();
     log::info!("Starting ListenOS - AI Voice Control System");
-    
+
     // Debug: Check if API keys are loaded
-    let deepgram_key = std::env::var("DEEPGRAM_API_KEY").unwrap_or_default();
-    log::info!("DEEPGRAM_API_KEY loaded: {} chars", deepgram_key.len());
+    let groq_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
+    log::info!("GROQ_API_KEY loaded: {} chars", groq_key.len());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -156,8 +160,12 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     let shortcut_str = shortcut.to_string();
-                    log::info!("Global shortcut event: {} - {:?}", shortcut_str, event.state);
-                    
+                    log::info!(
+                        "Global shortcut event: {} - {:?}",
+                        shortcut_str,
+                        event.state
+                    );
+
                     // Emit events to the assistant window (always visible pill)
                     if let Some(assistant) = app.get_webview_window("assistant") {
                         if event.state == ShortcutState::Pressed {
@@ -170,7 +178,7 @@ pub fn run() {
                         }
                     }
                 })
-                .build()
+                .build(),
         )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -184,7 +192,7 @@ pub fn run() {
             // This is called when a second instance is launched
             // argv contains the command line arguments including deep link URLs
             log::info!("Single instance callback: {:?}", argv);
-            
+
             // Check for deep link URL in arguments
             for arg in argv.iter() {
                 if arg.starts_with("listenos://") {
@@ -197,7 +205,7 @@ pub fn run() {
                     }
                 }
             }
-            
+
             // Show the dashboard window
             if let Some(window) = app.get_webview_window("dashboard") {
                 let _ = window.show();
@@ -286,15 +294,15 @@ pub fn run() {
         ])
         .setup(|app| {
             // Register global shortcut on startup
-            use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
             use std::str::FromStr;
-            
+            use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
             let handle = app.handle().clone();
             tauri::async_runtime::block_on(async {
                 let state = handle.state::<AppState>();
                 let config = state.config.lock().await;
                 let shortcut_str = &config.trigger_hotkey;
-                
+
                 if let Ok(shortcut) = Shortcut::from_str(shortcut_str) {
                     let _ = handle.global_shortcut().register(shortcut);
                     log::info!("Registered startup shortcut: {}", shortcut_str);
@@ -311,9 +319,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // Wait a bit before checking for updates
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                
+
                 log::info!("Checking for updates...");
-                
+
                 // Get the updater (returns Result)
                 let updater = match tauri_plugin_updater::UpdaterExt::updater(&app_handle) {
                     Ok(u) => u,
@@ -322,23 +330,33 @@ pub fn run() {
                         return;
                     }
                 };
-                
+
                 match updater.check().await {
                     Ok(Some(update)) => {
-                        log::info!("Update available: {} -> {}", update.current_version, update.version);
+                        log::info!(
+                            "Update available: {} -> {}",
+                            update.current_version,
+                            update.version
+                        );
                         // Notify the user via the dashboard window
                         if let Some(dashboard) = app_handle.get_webview_window("dashboard") {
-                            let _ = dashboard.emit("update-available", serde_json::json!({
-                                "current": update.current_version,
-                                "new": update.version,
-                            }));
+                            let _ = dashboard.emit(
+                                "update-available",
+                                serde_json::json!({
+                                    "current": update.current_version,
+                                    "new": update.version,
+                                }),
+                            );
                         }
-                        
+
                         // Auto-download and install
                         match update.download_and_install(|_, _| {}, || {}).await {
                             Ok(_) => {
-                                log::info!("Update downloaded and installed, will apply on restart");
-                                if let Some(dashboard) = app_handle.get_webview_window("dashboard") {
+                                log::info!(
+                                    "Update downloaded and installed, will apply on restart"
+                                );
+                                if let Some(dashboard) = app_handle.get_webview_window("dashboard")
+                                {
                                     let _ = dashboard.emit("update-ready", ());
                                 }
                             }
@@ -379,13 +397,13 @@ pub fn run() {
                     use tauri::webview::Color;
                     let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
                 }
-                
+
                 #[cfg(target_os = "macos")]
                 {
                     use tauri::webview::Color;
                     let _ = assistant.set_background_color(Some(Color(0, 0, 0, 0)));
                 }
-                
+
                 // Place assistant overlay at top-center of the current monitor.
                 center_assistant_horizontally(&app.handle().clone());
 
@@ -404,14 +422,14 @@ pub fn run() {
                     let mut clipboard = clipboard_state.lock().await;
                     if let Some(entry) = clipboard.check_and_record() {
                         log::debug!("Clipboard captured: {} chars", entry.char_count);
-                        
+
                         // Check for corrections (user typed something that differs from what we pasted)
                         let content = entry.content.clone();
                         drop(clipboard); // Release lock before acquiring another
-                        
+
                         let mut tracker = correction_tracker.lock().await;
                         let corrections = tracker.detect_corrections(&content);
-                        
+
                         // Auto-learn any detected corrections
                         if !corrections.is_empty() {
                             if let Ok(store) = dictionary::DictionaryStore::new() {
@@ -420,7 +438,11 @@ pub fn run() {
                                         continue; // Skip if already in dictionary
                                     }
                                     if let Ok(_) = store.add_word(corrected.clone(), true) {
-                                        log::info!("Auto-learned word: {} (from correction of {})", corrected, original);
+                                        log::info!(
+                                            "Auto-learned word: {} (from correction of {})",
+                                            corrected,
+                                            original
+                                        );
                                     }
                                 }
                             }
@@ -429,6 +451,82 @@ pub fn run() {
                 }
             });
             log::info!("Clipboard monitoring with auto-learning started");
+
+            // Watchdog: restart the capture stream if the microphone callback stalls while listening.
+            let state = app.state::<AppState>();
+            let is_listening = state.is_listening.clone();
+            let audio = state.audio.clone();
+            let streamer = state.streamer.clone();
+            let accumulator = state.accumulator.clone();
+            let error_log = state.error_log.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(750));
+                loop {
+                    interval.tick().await;
+
+                    if !*is_listening.lock().await {
+                        continue;
+                    }
+
+                    let needs_restart = {
+                        let streamer = streamer.lock().await;
+                        streamer.should_restart(tokio::time::Duration::from_millis(1800))
+                    };
+
+                    if !needs_restart {
+                        continue;
+                    }
+
+                    let preferred_device = {
+                        let audio = audio.lock().await;
+                        audio.selected_device.clone()
+                    };
+
+                    {
+                        let streamer = streamer.lock().await;
+                        streamer.stop_streaming();
+                        streamer.mark_recovering(
+                            "Audio capture stalled. Restarting microphone stream.",
+                        );
+                    }
+
+                    log::warn!("Audio capture stalled; restarting microphone stream");
+
+                    let receiver = {
+                        let streamer = streamer.lock().await;
+                        streamer.start_streaming(preferred_device.as_deref())
+                    };
+
+                    match receiver {
+                        Ok(receiver) => {
+                            streaming::spawn_audio_receiver_task(
+                                receiver,
+                                accumulator.clone(),
+                                is_listening.clone(),
+                            );
+                            log::info!("Audio watchdog restarted microphone stream successfully");
+                        }
+                        Err(err) => {
+                            {
+                                let streamer = streamer.lock().await;
+                                streamer.mark_error(err.clone());
+                            }
+                            {
+                                let mut error_log = error_log.lock().await;
+                                error_log.log_error_with_details(
+                                    crate::error_log::ErrorType::AudioCapture,
+                                    "Microphone stream restart failed",
+                                    err.clone(),
+                                );
+                            }
+                            log::error!(
+                                "Audio watchdog failed to restart microphone stream: {}",
+                                err
+                            );
+                        }
+                    }
+                }
+            });
 
             // Ensure autostart is always enabled so the assistant resumes after reboot/login.
             {
@@ -470,7 +568,9 @@ async fn show_dashboard(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_history(state: tauri::State<'_, AppState>) -> Result<Vec<VoiceProcessingResult>, String> {
+async fn get_history(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<VoiceProcessingResult>, String> {
     let history = state.history.lock().await;
     Ok(history.clone())
 }
@@ -493,13 +593,13 @@ async fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
 async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
-    
+
     if enabled {
         manager.enable().map_err(|e| e.to_string())?;
     } else {
         manager.disable().map_err(|e| e.to_string())?;
     }
-    
+
     // Return the new state
     manager.is_enabled().map_err(|e| e.to_string())
 }
@@ -540,11 +640,14 @@ async fn toggle_note_pin(id: String) -> Result<bool, String> {
 #[tauri::command]
 async fn create_voice_note(state: tauri::State<'_, AppState>) -> Result<notes::Note, String> {
     use cloud::VoiceClient;
-    
+
     // Get accumulated audio
     let (samples, sample_rate) = {
         let accumulator = state.accumulator.lock().await;
-        (accumulator.get_samples().to_vec(), accumulator.sample_rate())
+        (
+            accumulator.get_samples().to_vec(),
+            accumulator.sample_rate(),
+        )
     };
 
     if samples.is_empty() || samples.len() < 1600 {
@@ -554,10 +657,10 @@ async fn create_voice_note(state: tauri::State<'_, AppState>) -> Result<notes::N
     // Encode to WAV
     let wav_data = cloud::encode_wav(&samples, sample_rate)?;
 
-    // Transcribe with Deepgram (no intent processing)
+    // Transcribe with Groq Whisper (no intent processing)
     let client = VoiceClient::new();
     let result = client.transcribe(&wav_data).await?;
-    
+
     let text = result.text.trim();
     if text.is_empty() {
         return Err("No speech detected".to_string());
@@ -603,13 +706,20 @@ async fn get_dictionary_words() -> Result<Vec<dictionary::DictionaryWord>, Strin
 }
 
 #[tauri::command]
-async fn add_dictionary_word(word: String, is_auto_learned: Option<bool>) -> Result<dictionary::DictionaryWord, String> {
+async fn add_dictionary_word(
+    word: String,
+    is_auto_learned: Option<bool>,
+) -> Result<dictionary::DictionaryWord, String> {
     let store = dictionary::DictionaryStore::new()?;
     store.add_word(word, is_auto_learned.unwrap_or(false))
 }
 
 #[tauri::command]
-async fn update_dictionary_word(id: String, word: String, phonetic: Option<String>) -> Result<(), String> {
+async fn update_dictionary_word(
+    id: String,
+    word: String,
+    phonetic: Option<String>,
+) -> Result<(), String> {
     let store = dictionary::DictionaryStore::new()?;
     store.update_word(&id, word, phonetic)
 }
@@ -623,13 +733,18 @@ async fn delete_dictionary_word(id: String) -> Result<(), String> {
 // ============ Error Log Commands ============
 
 #[tauri::command]
-async fn get_errors(state: tauri::State<'_, AppState>, limit: Option<usize>) -> Result<Vec<error_log::ErrorEntry>, String> {
+async fn get_errors(
+    state: tauri::State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<error_log::ErrorEntry>, String> {
     let error_log = state.error_log.lock().await;
     Ok(error_log.get_recent(limit.unwrap_or(20)))
 }
 
 #[tauri::command]
-async fn get_undismissed_errors(state: tauri::State<'_, AppState>) -> Result<Vec<error_log::ErrorEntry>, String> {
+async fn get_undismissed_errors(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<error_log::ErrorEntry>, String> {
     let error_log = state.error_log.lock().await;
     Ok(error_log.get_undismissed())
 }
@@ -655,29 +770,33 @@ async fn dismiss_all_errors(state: tauri::State<'_, AppState>) -> Result<(), Str
 async fn learn_correction(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
-    corrected_text: String
+    corrected_text: String,
 ) -> Result<Vec<String>, String> {
     let mut tracker = state.correction_tracker.lock().await;
     let corrections = tracker.detect_corrections(&corrected_text);
-    
+
     // Auto-learn detected corrections to dictionary
     let mut learned = Vec::new();
     let store = dictionary::DictionaryStore::new()?;
-    
+
     for (original, corrected) in corrections {
         // Add the corrected word to dictionary (if not already there)
         if !store.word_exists(&corrected)? {
             store.add_word(corrected.clone(), true)?;
             learned.push(corrected.clone());
-            log::info!("Auto-learned word from correction: {} -> {}", original, corrected);
-            
+            log::info!(
+                "Auto-learned word from correction: {} -> {}",
+                original,
+                corrected
+            );
+
             // Emit event to frontend for notification
             if let Some(assistant) = app.get_webview_window("assistant") {
                 let _ = assistant.emit("word-learned", serde_json::json!({ "word": corrected }));
             }
         }
     }
-    
+
     Ok(learned)
 }
 
@@ -693,25 +812,28 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), tauri::Error> {
             return Ok(());
         }
     };
-    
+
     let _tray = TrayIconBuilder::new()
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| {
-            match event.id.as_ref() {
-                "quit" => app.exit(0),
-                "show" => {
-                    if let Some(window) = app.get_webview_window("dashboard") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "quit" => app.exit(0),
+            "show" => {
+                if let Some(window) = app.get_webview_window("dashboard") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
-                _ => {}
             }
+            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
                 if let Some(window) = tray.app_handle().get_webview_window("dashboard") {
                     let _ = window.show();
                     let _ = window.set_focus();

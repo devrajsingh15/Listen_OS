@@ -279,8 +279,9 @@ pub struct ApiKeys {
 
 /// Local runtime API settings persisted on device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LocalApiSettings {
-    pub deepgram_api_key: String,
+    pub groq_api_key: String,
 }
 
 impl LocalApiSettings {
@@ -314,7 +315,7 @@ impl LocalApiSettings {
 impl Default for LocalApiSettings {
     fn default() -> Self {
         Self {
-            deepgram_api_key: std::env::var("DEEPGRAM_API_KEY").unwrap_or_default(),
+            groq_api_key: std::env::var("GROQ_API_KEY").unwrap_or_default(),
         }
     }
 }

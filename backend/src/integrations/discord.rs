@@ -19,9 +19,8 @@ impl DiscordIntegration {
         #[cfg(windows)]
         {
             let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            let discord_path = std::path::Path::new(&localappdata)
-                .join("Discord");
-            
+            let discord_path = std::path::Path::new(&localappdata).join("Discord");
+
             discord_path.exists()
         }
 
@@ -36,7 +35,7 @@ impl DiscordIntegration {
             let output = Command::new("tasklist")
                 .args(["/FI", "IMAGENAME eq Discord.exe", "/NH"])
                 .output();
-            
+
             match output {
                 Ok(o) => {
                     let stdout = String::from_utf8_lossy(&o.stdout);
@@ -97,7 +96,7 @@ impl DiscordIntegration {
             let update_exe = std::path::Path::new(&localappdata)
                 .join("Discord")
                 .join("Update.exe");
-            
+
             if update_exe.exists() {
                 Command::new(&update_exe)
                     .args(["--processStart", "Discord.exe"])
@@ -156,10 +155,7 @@ impl AppIntegration for DiscordIntegration {
                 name: "Toggle Deafen".to_string(),
                 description: "Deafen or undeafen in Discord".to_string(),
                 parameters: vec![],
-                example_phrases: vec![
-                    "deafen discord".to_string(),
-                    "undeafen discord".to_string(),
-                ],
+                example_phrases: vec!["deafen discord".to_string(), "undeafen discord".to_string()],
             },
             IntegrationAction {
                 id: "discord_disconnect".to_string(),
@@ -177,52 +173,55 @@ impl AppIntegration for DiscordIntegration {
                 name: "Open Discord".to_string(),
                 description: "Open the Discord app".to_string(),
                 parameters: vec![],
-                example_phrases: vec![
-                    "open discord".to_string(),
-                    "launch discord".to_string(),
-                ],
+                example_phrases: vec!["open discord".to_string(), "launch discord".to_string()],
             },
         ]
     }
 
-    fn execute(&self, action: &str, _params: &serde_json::Value) -> Result<IntegrationResult, String> {
+    fn execute(
+        &self,
+        action: &str,
+        _params: &serde_json::Value,
+    ) -> Result<IntegrationResult, String> {
         match action {
             "discord_mute" => {
                 if !Self::is_discord_running() {
                     return Err("Discord is not running".to_string());
                 }
-                
+
                 // Discord mute shortcut: Ctrl+Shift+M
                 Self::send_discord_shortcut("^+m")?;
                 Ok(IntegrationResult::success("Toggled Discord mute"))
             }
-            
+
             "discord_deafen" => {
                 if !Self::is_discord_running() {
                     return Err("Discord is not running".to_string());
                 }
-                
+
                 // Discord deafen shortcut: Ctrl+Shift+D
                 Self::send_discord_shortcut("^+d")?;
                 Ok(IntegrationResult::success("Toggled Discord deafen"))
             }
-            
+
             "discord_disconnect" => {
                 if !Self::is_discord_running() {
                     return Err("Discord is not running".to_string());
                 }
-                
+
                 // Discord disconnect shortcut: Ctrl+Shift+E (with Discord focused)
                 // Note: This might vary based on Discord keybinds
                 Self::send_discord_shortcut("^+e")?;
-                Ok(IntegrationResult::success("Disconnected from voice channel"))
+                Ok(IntegrationResult::success(
+                    "Disconnected from voice channel",
+                ))
             }
-            
+
             "discord_open" => {
                 Self::open_discord()?;
                 Ok(IntegrationResult::success("Opened Discord"))
             }
-            
+
             _ => Err(format!("Unknown Discord action: {}", action)),
         }
     }

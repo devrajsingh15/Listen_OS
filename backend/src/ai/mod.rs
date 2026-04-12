@@ -1,5 +1,5 @@
 //! AI integration module
-//! 
+//!
 //! This module handles speech-to-text (Whisper) and LLM inference (Llama).
 
 #![allow(dead_code)]
@@ -56,9 +56,9 @@ pub struct TranscriptSegment {
 /// Provider for STT/LLM operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AIProvider {
-    Local,       // whisper-rs + llama-cpp-rs
-    OpenAI,      // API fallback
-    OpenRouter,  // Multi-model router
+    Local,      // whisper-rs + llama-cpp-rs
+    OpenAI,     // API fallback
+    OpenRouter, // Multi-model router
 }
 
 impl Default for AIProvider {
@@ -103,18 +103,30 @@ impl AIEngine {
         }
     }
 
-    async fn transcribe_local(&self, _samples: &[f32], _sample_rate: u32) -> Result<String, String> {
+    async fn transcribe_local(
+        &self,
+        _samples: &[f32],
+        _sample_rate: u32,
+    ) -> Result<String, String> {
         // TODO: Implement whisper-rs transcription
         // This requires whisper.cpp to be properly set up
         Err("Local Whisper not yet implemented. Use API provider.".to_string())
     }
 
-    async fn transcribe_openai(&self, _samples: &[f32], _sample_rate: u32) -> Result<String, String> {
+    async fn transcribe_openai(
+        &self,
+        _samples: &[f32],
+        _sample_rate: u32,
+    ) -> Result<String, String> {
         // TODO: Implement OpenAI Whisper API
         Err("OpenAI API not yet implemented".to_string())
     }
 
-    async fn transcribe_openrouter(&self, _samples: &[f32], _sample_rate: u32) -> Result<String, String> {
+    async fn transcribe_openrouter(
+        &self,
+        _samples: &[f32],
+        _sample_rate: u32,
+    ) -> Result<String, String> {
         // TODO: Implement OpenRouter API
         Err("OpenRouter API not yet implemented".to_string())
     }
@@ -134,7 +146,7 @@ impl AIEngine {
 
     fn classify_with_rules(&self, text: &str) -> Result<IntentClassification, String> {
         let text_lower = text.to_lowercase();
-        
+
         let intent_type = if text_lower.starts_with("open ") {
             IntentType::OpenApp
         } else if text_lower.starts_with("type ") || text_lower.starts_with("write ") {
@@ -189,31 +201,23 @@ pub struct IntentClassification {
 /// Extract the value/parameter from text based on intent
 fn extract_value(text: &str, intent: &IntentType) -> Option<String> {
     let text_lower = text.to_lowercase();
-    
+
     match intent {
-        IntentType::OpenApp => {
-            text_lower
-                .strip_prefix("open ")
-                .map(|s| s.trim().to_string())
-        }
-        IntentType::TypeText => {
-            text_lower
-                .strip_prefix("type ")
-                .or_else(|| text_lower.strip_prefix("write "))
-                .map(|s| s.trim().to_string())
-        }
-        IntentType::WebSearch => {
-            text_lower
-                .strip_prefix("search ")
-                .or_else(|| text_lower.strip_prefix("google "))
-                .map(|s| s.trim().to_string())
-        }
-        IntentType::RunCommand => {
-            text_lower
-                .strip_prefix("run ")
-                .or_else(|| text_lower.strip_prefix("execute "))
-                .map(|s| s.trim().to_string())
-        }
+        IntentType::OpenApp => text_lower
+            .strip_prefix("open ")
+            .map(|s| s.trim().to_string()),
+        IntentType::TypeText => text_lower
+            .strip_prefix("type ")
+            .or_else(|| text_lower.strip_prefix("write "))
+            .map(|s| s.trim().to_string()),
+        IntentType::WebSearch => text_lower
+            .strip_prefix("search ")
+            .or_else(|| text_lower.strip_prefix("google "))
+            .map(|s| s.trim().to_string()),
+        IntentType::RunCommand => text_lower
+            .strip_prefix("run ")
+            .or_else(|| text_lower.strip_prefix("execute "))
+            .map(|s| s.trim().to_string()),
         IntentType::Dictation => Some(text.to_string()),
         _ => None,
     }

@@ -4,7 +4,7 @@
 //! to enable multi-turn dialogues and context-aware responses.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -85,9 +85,9 @@ impl Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fact {
     pub id: String,
-    pub category: String,        // e.g., "preference", "contact", "routine"
-    pub key: String,             // e.g., "favorite_music"
-    pub value: String,           // e.g., "lofi hip hop"
+    pub category: String, // e.g., "preference", "contact", "routine"
+    pub key: String,      // e.g., "favorite_music"
+    pub value: String,    // e.g., "lofi hip hop"
     pub source_message_id: String,
     pub created_at: DateTime<Utc>,
     pub last_used: DateTime<Utc>,
@@ -138,7 +138,8 @@ impl ConversationMemory {
         success: Option<bool>,
         payload: Option<serde_json::Value>,
     ) {
-        self.messages.push(Message::assistant(content, action, success));
+        self.messages
+            .push(Message::assistant(content, action, success));
         if let Some(a) = action {
             self.last_action = Some(format!("{:?}", a));
             self.last_action_payload = payload;
@@ -179,7 +180,8 @@ impl ConversationMemory {
     /// Get the last action description for context
     pub fn get_last_action_context(&self) -> Option<String> {
         self.last_action.as_ref().map(|action| {
-            let payload_info = self.last_action_payload
+            let payload_info = self
+                .last_action_payload
                 .as_ref()
                 .map(|p| format!(" with {:?}", p))
                 .unwrap_or_default();
@@ -188,7 +190,13 @@ impl ConversationMemory {
     }
 
     /// Add an extracted fact
-    pub fn add_fact(&mut self, category: String, key: String, value: String, source_msg_id: String) {
+    pub fn add_fact(
+        &mut self,
+        category: String,
+        key: String,
+        value: String,
+        source_msg_id: String,
+    ) {
         // Check if fact already exists and update it
         if let Some(existing) = self.extracted_facts.iter_mut().find(|f| f.key == key) {
             existing.value = value;
@@ -212,7 +220,8 @@ impl ConversationMemory {
         // Trim old facts if over limit
         if self.extracted_facts.len() > MAX_FACTS_PER_SESSION {
             // Remove least used facts
-            self.extracted_facts.sort_by(|a, b| b.use_count.cmp(&a.use_count));
+            self.extracted_facts
+                .sort_by(|a, b| b.use_count.cmp(&a.use_count));
             self.extracted_facts.truncate(MAX_FACTS_PER_SESSION);
         }
     }
@@ -243,32 +252,34 @@ impl ConversationStore {
     /// Create or open the conversation database
     pub fn new() -> Result<Self, String> {
         let db_path = Self::get_db_path()?;
-        
+
         // Ensure directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create data directory: {}", e))?;
         }
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("Failed to open database: {}", e))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
-        let store = Self { conn: Mutex::new(conn) };
+        let store = Self {
+            conn: Mutex::new(conn),
+        };
         store.init_tables()?;
         Ok(store)
     }
 
     /// Get the database path
     fn get_db_path() -> Result<PathBuf, String> {
-        let data_dir = dirs_next::data_dir()
-            .ok_or_else(|| "Could not find data directory".to_string())?;
+        let data_dir =
+            dirs_next::data_dir().ok_or_else(|| "Could not find data directory".to_string())?;
         Ok(data_dir.join("ListenOS").join("conversation.db"))
     }
 
     /// Initialize database tables
     fn init_tables(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS sessions (
@@ -302,8 +313,9 @@ impl ConversationStore {
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
             CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
-            "
-        ).map_err(|e| format!("Failed to initialize tables: {}", e))?;
+            ",
+        )
+        .map_err(|e| format!("Failed to initialize tables: {}", e))?;
 
         Ok(())
     }
@@ -316,7 +328,8 @@ impl ConversationStore {
         conn.execute(
             "INSERT OR REPLACE INTO sessions (id, started_at) VALUES (?1, ?2)",
             params![memory.session_id, memory.started_at.to_rfc3339()],
-        ).map_err(|e| format!("Failed to save session: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to save session: {}", e))?;
 
         // Save messages
         for msg in &memory.messages {
@@ -359,90 +372,101 @@ impl ConversationStore {
     /// Load all facts from database
     pub fn load_facts(&self) -> Result<Vec<Fact>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         let mut stmt = conn.prepare(
             "SELECT id, category, key, value, source_message_id, created_at, last_used, use_count 
              FROM facts ORDER BY use_count DESC"
         ).map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
-        let facts = stmt.query_map([], |row| {
-            Ok(Fact {
-                id: row.get(0)?,
-                category: row.get(1)?,
-                key: row.get(2)?,
-                value: row.get(3)?,
-                source_message_id: row.get(4)?,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                last_used: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                use_count: row.get(7)?,
+        let facts = stmt
+            .query_map([], |row| {
+                Ok(Fact {
+                    id: row.get(0)?,
+                    category: row.get(1)?,
+                    key: row.get(2)?,
+                    value: row.get(3)?,
+                    source_message_id: row.get(4)?,
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    last_used: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    use_count: row.get(7)?,
+                })
             })
-        }).map_err(|e| format!("Failed to query facts: {}", e))?;
+            .map_err(|e| format!("Failed to query facts: {}", e))?;
 
-        facts.collect::<Result<Vec<_>, _>>()
+        facts
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to collect facts: {}", e))
     }
 
     /// Get recent sessions
     pub fn get_recent_sessions(&self, limit: usize) -> Result<Vec<String>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
-        let mut stmt = conn.prepare(
-            "SELECT id FROM sessions ORDER BY started_at DESC LIMIT ?1"
-        ).map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
-        let sessions = stmt.query_map([limit], |row| row.get(0))
+        let mut stmt = conn
+            .prepare("SELECT id FROM sessions ORDER BY started_at DESC LIMIT ?1")
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+
+        let sessions = stmt
+            .query_map([limit], |row| row.get(0))
             .map_err(|e| format!("Failed to query sessions: {}", e))?;
 
-        sessions.collect::<Result<Vec<_>, _>>()
+        sessions
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to collect sessions: {}", e))
     }
 
     /// Load messages for a session
     pub fn load_session_messages(&self, session_id: &str) -> Result<Vec<Message>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
-        let mut stmt = conn.prepare(
-            "SELECT id, role, content, timestamp, action_taken, action_success 
-             FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC"
-        ).map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
-        let messages = stmt.query_map([session_id], |row| {
-            let role_str: String = row.get(1)?;
-            let role = match role_str.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                "system" => Role::System,
-                _ => Role::User,
-            };
-            
-            Ok(Message {
-                id: row.get(0)?,
-                role,
-                content: row.get(2)?,
-                timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                action_taken: row.get(4)?,
-                action_success: row.get::<_, Option<i32>>(5)?.map(|v| v != 0),
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, role, content, timestamp, action_taken, action_success 
+             FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC",
+            )
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+
+        let messages = stmt
+            .query_map([session_id], |row| {
+                let role_str: String = row.get(1)?;
+                let role = match role_str.as_str() {
+                    "user" => Role::User,
+                    "assistant" => Role::Assistant,
+                    "system" => Role::System,
+                    _ => Role::User,
+                };
+
+                Ok(Message {
+                    id: row.get(0)?,
+                    role,
+                    content: row.get(2)?,
+                    timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    action_taken: row.get(4)?,
+                    action_success: row.get::<_, Option<i32>>(5)?.map(|v| v != 0),
+                })
             })
-        }).map_err(|e| format!("Failed to query messages: {}", e))?;
+            .map_err(|e| format!("Failed to query messages: {}", e))?;
 
-        messages.collect::<Result<Vec<_>, _>>()
+        messages
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to collect messages: {}", e))
     }
 
     /// Update a fact's usage
     pub fn touch_fact(&self, key: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute(
             "UPDATE facts SET last_used = ?1, use_count = use_count + 1 WHERE key = ?2",
             params![Utc::now().to_rfc3339(), key],
-        ).map_err(|e| format!("Failed to update fact: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to update fact: {}", e))?;
 
         Ok(())
     }
@@ -452,15 +476,16 @@ impl ConversationStore {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
         // Get sessions to delete
-        let mut stmt = conn.prepare(
-            "SELECT id FROM sessions ORDER BY started_at DESC LIMIT -1 OFFSET ?1"
-        ).map_err(|e| format!("Failed to prepare statement: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM sessions ORDER BY started_at DESC LIMIT -1 OFFSET ?1")
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
-        let sessions_to_delete: Vec<String> = stmt.query_map([keep_count], |row| row.get(0))
+        let sessions_to_delete: Vec<String> = stmt
+            .query_map([keep_count], |row| row.get(0))
             .map_err(|e| format!("Failed to query: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
-        
+
         drop(stmt);
 
         if sessions_to_delete.is_empty() {

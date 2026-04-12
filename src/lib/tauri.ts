@@ -34,6 +34,38 @@ export interface VoiceProcessingResult {
   executed: boolean;
   response_text: string | null;
   session_id: string;
+  delivery_status: DeliveryStatusSnapshot;
+}
+
+export type AudioHealthPhase = "Idle" | "Starting" | "Healthy" | "Recovering" | "Error";
+export type DeliveryPhase =
+  | "Idle"
+  | "Preparing"
+  | "Injecting"
+  | "Verifying"
+  | "Retrying"
+  | "Succeeded"
+  | "RecoverableFailure";
+export type TargetSurfaceKind = "Terminal" | "Browser" | "CodeEditor" | "TextField" | "Unknown";
+
+export interface AudioRuntimeStatus {
+  phase: AudioHealthPhase;
+  device_name: string | null;
+  restart_count: number;
+  last_error: string | null;
+  last_callback_age_ms: number | null;
+}
+
+export interface DeliveryStatusSnapshot {
+  phase: DeliveryPhase;
+  target: string | null;
+  surface: TargetSurfaceKind;
+  strategy: string | null;
+  attempts: number;
+  summary: string;
+  transcript_preview: string | null;
+  recovered_to_clipboard: boolean;
+  updated_at: string;
 }
 
 export interface ConversationMessage {
@@ -104,6 +136,8 @@ export interface StatusResponse {
   is_streaming: boolean;
   audio_device: string | null;
   last_transcription: string | null;
+  audio_status: AudioRuntimeStatus;
+  delivery_status: DeliveryStatusSnapshot;
 }
 
 // ============ Voice Commands ============
@@ -113,7 +147,7 @@ export async function startListening(): Promise<boolean> {
   return invoke("start_listening");
 }
 
-// Stop listening - processes audio with Deepgram ASR, executes action, returns result
+// Stop listening - processes audio with Groq Whisper, executes action, returns result
 export async function stopListening(dictationOnly = false): Promise<VoiceProcessingResult> {
   return invoke("stop_listening", {
     dictationOnly,
@@ -191,7 +225,7 @@ export async function setVibeCodingConfig(
 }
 
 export interface LocalApiSettings {
-  deepgram_api_key: string;
+  groq_api_key: string;
 }
 
 export async function getLocalApiSettings(): Promise<LocalApiSettings> {
@@ -199,11 +233,11 @@ export async function getLocalApiSettings(): Promise<LocalApiSettings> {
 }
 
 export async function setLocalApiSettings(
-  deepgramApiKey: string,
+  groqApiKey: string,
 ): Promise<LocalApiSettings> {
   return invoke("set_local_api_settings", {
-    deepgramApiKey,
-    deepgram_api_key: deepgramApiKey,
+    groqApiKey,
+    groq_api_key: groqApiKey,
   });
 }
 

@@ -3,8 +3,8 @@
 //! Provides modular integrations with popular applications
 //! like Spotify, Discord, Slack, and system controls.
 
-pub mod spotify;
 pub mod discord;
+pub mod spotify;
 pub mod system_controls;
 
 use serde::{Deserialize, Serialize};
@@ -14,18 +14,22 @@ use std::collections::HashMap;
 pub trait AppIntegration: Send + Sync {
     /// Get the integration name
     fn name(&self) -> &str;
-    
+
     /// Get a description of the integration
     fn description(&self) -> &str;
-    
+
     /// Check if the integration is available/installed
     fn is_available(&self) -> bool;
-    
+
     /// Get supported actions
     fn supported_actions(&self) -> Vec<IntegrationAction>;
-    
+
     /// Execute an action
-    fn execute(&self, action: &str, params: &serde_json::Value) -> Result<IntegrationResult, String>;
+    fn execute(
+        &self,
+        action: &str,
+        params: &serde_json::Value,
+    ) -> Result<IntegrationResult, String>;
 }
 
 /// Describes an action an integration can perform
@@ -183,7 +187,11 @@ impl IntegrationManager {
             if !integration.is_available() {
                 continue;
             }
-            if integration.supported_actions().iter().any(|a| a.id == action) {
+            if integration
+                .supported_actions()
+                .iter()
+                .any(|a| a.id == action)
+            {
                 return Some((name.as_str(), integration.as_ref()));
             }
         }

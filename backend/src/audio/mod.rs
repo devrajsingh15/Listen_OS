@@ -1,11 +1,11 @@
 //! Audio capture and processing module
-//! 
+//!
 //! Handles microphone input capture using the `cpal` library.
 
-use cpal::traits::{DeviceTrait, HostTrait};
-use std::sync::{Arc, Mutex};
-use serde::{Deserialize, Serialize};
 use base64::Engine;
+use cpal::traits::{DeviceTrait, HostTrait};
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
 /// Audio device information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,8 +84,10 @@ impl AudioState {
         }
 
         self.is_recording = false;
-        
-        let samples = self.samples.lock()
+
+        let samples = self
+            .samples
+            .lock()
             .map_err(|e| format!("Failed to lock samples: {}", e))?
             .clone();
 
@@ -114,9 +116,7 @@ pub fn samples_to_pcm(samples: &[f32]) -> Vec<i16> {
 #[allow(dead_code)]
 pub fn samples_to_base64_pcm(samples: &[f32], _sample_rate: u32) -> Result<String, String> {
     let pcm_data = samples_to_pcm(samples);
-    let bytes: Vec<u8> = pcm_data.iter()
-        .flat_map(|&s| s.to_le_bytes())
-        .collect();
-    
+    let bytes: Vec<u8> = pcm_data.iter().flat_map(|&s| s.to_le_bytes()).collect();
+
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }

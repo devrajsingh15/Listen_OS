@@ -264,7 +264,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
   const [vibeConfig, setVibeConfigState] = useState<VibeCodingConfig>(DEFAULT_VIBE_CONFIG);
   const [vibeSaving, setVibeSaving] = useState(false);
   const [vibeLoading, setVibeLoading] = useState(false);
-  const [deepgramApiKey, setDeepgramApiKey] = useState("");
+  const [groqApiKey, setGroqApiKey] = useState("");
   const [apiSettingsLoading, setApiSettingsLoading] = useState(false);
   const [apiSettingsSaving, setApiSettingsSaving] = useState(false);
 
@@ -298,7 +298,7 @@ function SettingsContent({ section }: { section: SettingsSection }) {
       setApiSettingsLoading(true);
       getLocalApiSettings()
         .then((localApi) => {
-          setDeepgramApiKey(localApi.deepgram_api_key ?? "");
+          setGroqApiKey(localApi.groq_api_key ?? "");
         })
         .catch((err) => {
           console.error("Failed to load local API settings:", err);
@@ -365,23 +365,23 @@ function SettingsContent({ section }: { section: SettingsSection }) {
     await updateSettings({ showInTray: checked });
   }, [updateSettings]);
 
-  const handleDeepgramApiKeySave = useCallback(async () => {
+  const handleGroqApiKeySave = useCallback(async () => {
     if (!isTauri()) {
       return;
     }
 
     setApiSettingsSaving(true);
     try {
-      const saved = await setLocalApiSettings(deepgramApiKey);
-      setDeepgramApiKey(saved.deepgram_api_key ?? "");
-      setUpdateStatus("Deepgram API key saved locally");
+      const saved = await setLocalApiSettings(groqApiKey);
+      setGroqApiKey(saved.groq_api_key ?? "");
+      setUpdateStatus("Groq API key saved locally");
     } catch (err) {
-      console.error("Failed to save Deepgram API key:", err);
-      setUpdateStatus("Failed to save Deepgram API key");
+      console.error("Failed to save Groq API key:", err);
+      setUpdateStatus("Failed to save Groq API key");
     } finally {
       setApiSettingsSaving(false);
     }
-  }, [deepgramApiKey]);
+  }, [groqApiKey]);
 
   const handleSourceLanguageChange = useCallback(async (newLanguage: string) => {
     const previousSource = sourceLanguage;
@@ -634,20 +634,20 @@ function SettingsContent({ section }: { section: SettingsSection }) {
               }
             />
             <SettingsRow
-              label="Deepgram API key"
-              description={deepgramApiKey.trim().length > 0 ? "Your key is saved on this device." : "Required for local voice processing."}
+              label="Groq API key"
+              description={groqApiKey.trim().length > 0 ? "Your key is saved on this device." : "Required for Groq Whisper transcription."}
               action={
                 <div className="flex items-center gap-2">
                   <input
                     type="password"
-                    value={deepgramApiKey}
-                    onChange={(e) => setDeepgramApiKey(e.target.value)}
+                    value={groqApiKey}
+                    onChange={(e) => setGroqApiKey(e.target.value)}
                     disabled={apiSettingsLoading || apiSettingsSaving}
-                    placeholder="dg_..."
+                    placeholder="gsk_..."
                     className="w-56 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors disabled:opacity-50"
                   />
                   <button
-                    onClick={() => void handleDeepgramApiKeySave()}
+                    onClick={() => void handleGroqApiKeySave()}
                     disabled={apiSettingsLoading || apiSettingsSaving}
                     className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
                   >

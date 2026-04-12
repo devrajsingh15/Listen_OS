@@ -1,11 +1,11 @@
 //! System control and automation module
-//! 
+//!
 //! Handles keyboard/mouse simulation, window management, and OS commands.
 
 #![allow(dead_code)]
 
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use serde::{Deserialize, Serialize};
-use enigo::{Enigo, Key, Keyboard, Settings, Direction};
 
 /// System action types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,54 +56,61 @@ impl SystemController {
     }
 
     fn type_text(&mut self, text: &str) -> Result<String, String> {
-        let enigo = self.enigo.as_mut()
-            .ok_or("Enigo not initialized")?;
-        
-        enigo.text(text)
+        let enigo = self.enigo.as_mut().ok_or("Enigo not initialized")?;
+
+        enigo
+            .text(text)
             .map_err(|e| format!("Failed to type text: {}", e))?;
-        
+
         Ok(format!("Typed: {}", text))
     }
 
     fn press_key(&mut self, key: &str) -> Result<String, String> {
-        let enigo = self.enigo.as_mut()
-            .ok_or("Enigo not initialized")?;
-        
+        let enigo = self.enigo.as_mut().ok_or("Enigo not initialized")?;
+
         let key_enum = Self::string_to_key_static(key)?;
-        
-        enigo.key(key_enum, Direction::Click)
+
+        enigo
+            .key(key_enum, Direction::Click)
             .map_err(|e| format!("Failed to press key: {}", e))?;
-        
+
         Ok(format!("Pressed: {}", key))
     }
 
     fn press_hotkey(&mut self, keys: &[String]) -> Result<String, String> {
         // Convert all keys first to avoid borrow issues
-        let key_enums: Vec<Key> = keys.iter()
+        let key_enums: Vec<Key> = keys
+            .iter()
             .map(|k| Self::string_to_key_static(k))
             .collect::<Result<Vec<_>, _>>()?;
-        
-        let enigo = self.enigo.as_mut()
-            .ok_or("Enigo not initialized")?;
-        
+
+        let enigo = self.enigo.as_mut().ok_or("Enigo not initialized")?;
+
         // Press all modifier keys
         for key_enum in key_enums.iter().take(key_enums.len().saturating_sub(1)) {
-            enigo.key(*key_enum, Direction::Press)
+            enigo
+                .key(*key_enum, Direction::Press)
                 .map_err(|e| format!("Failed to press key: {}", e))?;
         }
-        
+
         // Press the final key
         if let Some(last_key) = key_enums.last() {
-            enigo.key(*last_key, Direction::Click)
+            enigo
+                .key(*last_key, Direction::Click)
                 .map_err(|e| format!("Failed to press key: {}", e))?;
         }
-        
+
         // Release all modifier keys
-        for key_enum in key_enums.iter().take(key_enums.len().saturating_sub(1)).rev() {
-            enigo.key(*key_enum, Direction::Release)
+        for key_enum in key_enums
+            .iter()
+            .take(key_enums.len().saturating_sub(1))
+            .rev()
+        {
+            enigo
+                .key(*key_enum, Direction::Release)
                 .map_err(|e| format!("Failed to release key: {}", e))?;
         }
-        
+
         Ok(format!("Pressed hotkey: {:?}", keys))
     }
 
@@ -137,18 +144,16 @@ impl SystemController {
         let result = std::process::Command::new("cmd")
             .args(["/C", "start", "", app])
             .spawn();
-        
+
         #[cfg(target_os = "macos")]
         let result = std::process::Command::new("open")
             .arg("-a")
             .arg(app)
             .spawn();
-        
+
         #[cfg(target_os = "linux")]
-        let result = std::process::Command::new("xdg-open")
-            .arg(app)
-            .spawn();
-        
+        let result = std::process::Command::new("xdg-open").arg(app).spawn();
+
         result.map_err(|e| format!("Failed to open app: {}", e))?;
         Ok(format!("Opened: {}", app))
     }
@@ -158,17 +163,13 @@ impl SystemController {
         let result = std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
             .spawn();
-        
+
         #[cfg(target_os = "macos")]
-        let result = std::process::Command::new("open")
-            .arg(url)
-            .spawn();
-        
+        let result = std::process::Command::new("open").arg(url).spawn();
+
         #[cfg(target_os = "linux")]
-        let result = std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn();
-        
+        let result = std::process::Command::new("xdg-open").arg(url).spawn();
+
         result.map_err(|e| format!("Failed to open URL: {}", e))?;
         Ok(format!("Opened: {}", url))
     }
@@ -178,14 +179,12 @@ impl SystemController {
         let output = std::process::Command::new("powershell")
             .args(["-Command", cmd])
             .output();
-        
+
         #[cfg(not(windows))]
-        let output = std::process::Command::new("sh")
-            .args(["-c", cmd])
-            .output();
-        
+        let output = std::process::Command::new("sh").args(["-c", cmd]).output();
+
         let output = output.map_err(|e| format!("Failed to run command: {}", e))?;
-        
+
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
@@ -237,17 +236,19 @@ impl SystemController {
     }
 
     fn paste_from_clipboard(&mut self) -> Result<String, String> {
-        let enigo = self.enigo.as_mut()
-            .ok_or("Enigo not initialized")?;
-        
+        let enigo = self.enigo.as_mut().ok_or("Enigo not initialized")?;
+
         // Ctrl+V
-        enigo.key(Key::Control, Direction::Press)
+        enigo
+            .key(Key::Control, Direction::Press)
             .map_err(|e| format!("{}", e))?;
-        enigo.key(Key::Unicode('v'), Direction::Click)
+        enigo
+            .key(Key::Unicode('v'), Direction::Click)
             .map_err(|e| format!("{}", e))?;
-        enigo.key(Key::Control, Direction::Release)
+        enigo
+            .key(Key::Control, Direction::Release)
             .map_err(|e| format!("{}", e))?;
-        
+
         Ok("Pasted from clipboard".to_string())
     }
 }

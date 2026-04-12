@@ -144,7 +144,7 @@ ListenOS/
 - **Frontend**: Next.js 16, React 19, Tailwind CSS, Radix UI
 - **Backend**: Rust, Tauri 2.0
 - **AI Services**: 
-  - **Speech-to-Text**: Deepgram
+  - **Speech-to-Text**: Groq Whisper Large v3
   - **Intent Processing**: Local desktop pipeline
 - **Audio**: cpal for native audio capture
 
@@ -156,26 +156,26 @@ The default trigger is **Ctrl+Space**. You can change this in the Settings modal
 
 ### API Keys
 
-ListenOS requires your own Deepgram API key for local processing.
+ListenOS requires your own Groq API key for local processing.
 
-First-run onboarding asks for this key, and you can update it later in **Settings -> System -> Deepgram API key**.
+First-run onboarding asks for this key, and you can update it later in **Settings -> System -> Groq API key**.
 
 You can also set keys in `.env.local`:
 
 1. Create/edit `.env.local` in the project root
 2. Add your keys:
    ```env
-   DEEPGRAM_API_KEY=your_deepgram_api_key_here
+   GROQ_API_KEY=your_groq_api_key_here
    ```
 
 Get your keys:
-- **Deepgram**: [console.deepgram.com](https://console.deepgram.com)
+- **Groq**: [console.groq.com](https://console.groq.com)
 
 ### Onboarding
 
 On first launch, onboarding walks through:
 
-1. Entering your Deepgram API key
+1. Entering your Groq API key
 2. Selecting a microphone
 3. Running a microphone test
 4. Optionally adding starter command templates
@@ -187,7 +187,7 @@ Bluetooth hands-free microphone profiles are blocked by default to prevent outpu
 ListenOS runs as a local desktop runtime by default.
 
 1. Open **Settings -> System**
-2. Paste your key in **Deepgram API key**
+2. Paste your key in **Groq API key**
 3. Save and use the assistant normally
 
 ## 🔧 Development
@@ -277,7 +277,7 @@ This project is proprietary software. See [LICENSE](LICENSE) for licensing terms
 ## 🙏 Acknowledgments
 
 - [Tauri](https://tauri.app/) - For the amazing desktop framework
-- [Deepgram](https://deepgram.com/) - Speech-to-text provider
+- [Groq](https://groq.com/) - Speech-to-text provider
 
 <p align="center">
   <strong>Developed by ListenOS</strong><br>

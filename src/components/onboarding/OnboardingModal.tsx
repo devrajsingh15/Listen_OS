@@ -40,7 +40,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
   const [isTestingMic, setIsTestingMic] = useState(false);
   const [testSuccess, setTestSuccess] = useState(false);
-  const [deepgramApiKey, setDeepgramApiKey] = useState("");
+  const [groqApiKey, setGroqApiKey] = useState("");
   const [apiSettingsSaving, setApiSettingsSaving] = useState(false);
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
@@ -53,7 +53,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
       ]);
       setDevices(devs);
       setTemplates(tmpls);
-      setDeepgramApiKey(localApi.deepgram_api_key ?? "");
+      setGroqApiKey(localApi.groq_api_key ?? "");
       
       // Select a safe default device (avoid hands-free profiles that can hijack output).
       const defaultDevice = devs.find((d) => d.is_default && !isHandsFreeDeviceName(d.name))
@@ -98,9 +98,9 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
   };
 
   const handleApiKeyContinue = async () => {
-    const cleaned = deepgramApiKey.trim();
+    const cleaned = groqApiKey.trim();
     if (!cleaned) {
-      setApiKeyError("Deepgram API key is required.");
+      setApiKeyError("Groq API key is required.");
       return;
     }
 
@@ -115,7 +115,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
       await setLocalApiSettings(cleaned);
       nextStep();
     } catch (error) {
-      console.error("Failed to save Deepgram API key:", error);
+      console.error("Failed to save Groq API key:", error);
       setApiKeyError("Failed to save key. Please try again.");
     } finally {
       setApiSettingsSaving(false);
@@ -163,7 +163,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
     onComplete();
   };
 
-  const hasSavedApiKey = deepgramApiKey.trim().length > 0;
+  const hasSavedApiKey = groqApiKey.trim().length > 0;
   const steps: Step[] = hasSavedApiKey
     ? ["welcome", "microphone", "test", "commands", "complete"]
     : ["welcome", "api-key", "microphone", "test", "commands", "complete"];
@@ -328,22 +328,22 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
               exit={{ opacity: 0, x: -10 }}
               transition={{ duration: 0.15 }}
             >
-              <h2 className="mb-1.5 text-lg font-semibold text-foreground">Add your Deepgram API key</h2>
+              <h2 className="mb-1.5 text-lg font-semibold text-foreground">Add your Groq API key</h2>
               <p className="mb-4 text-sm text-muted">
-                ListenOS uses Deepgram for real-time speech recognition during self-hosted voice processing.
+                ListenOS uses Groq Whisper Large v3 for self-hosted voice transcription.
               </p>
 
               <div className="mb-4 space-y-2">
                 <input
                   type="password"
-                  value={deepgramApiKey}
-                  onChange={(e) => setDeepgramApiKey(e.target.value)}
-                  placeholder="dg_..."
+                  value={groqApiKey}
+                  onChange={(e) => setGroqApiKey(e.target.value)}
+                  placeholder="gsk_..."
                   className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
                   disabled={apiSettingsSaving}
                 />
                 {apiKeyError && <p className="text-xs text-red-500">{apiKeyError}</p>}
-                <p className="text-xs text-muted">Get your key at console.deepgram.com.</p>
+                <p className="text-xs text-muted">Get your key at console.groq.com.</p>
               </div>
 
               <div className="flex gap-2">
@@ -356,7 +356,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                 </button>
                 <button
                   onClick={() => void handleApiKeyContinue()}
-                  disabled={apiSettingsSaving || deepgramApiKey.trim().length === 0}
+                  disabled={apiSettingsSaving || groqApiKey.trim().length === 0}
                   className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
                 >
                   {apiSettingsSaving ? "Saving..." : "Continue"}

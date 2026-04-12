@@ -3,7 +3,7 @@
 //! Allows users to define their own voice-triggered command sequences.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -65,12 +65,18 @@ pub fn get_builtin_templates() -> Vec<CustomCommand> {
             actions: vec![
                 ActionStep::new("open_url", serde_json::json!({"url": "https://gmail.com"}))
                     .with_description("Open Gmail"),
-                ActionStep::new("open_url", serde_json::json!({"url": "https://calendar.google.com"}))
-                    .with_delay(1000)
-                    .with_description("Open Google Calendar"),
-                ActionStep::new("open_url", serde_json::json!({"url": "https://news.google.com"}))
-                    .with_delay(1000)
-                    .with_description("Open Google News"),
+                ActionStep::new(
+                    "open_url",
+                    serde_json::json!({"url": "https://calendar.google.com"}),
+                )
+                .with_delay(1000)
+                .with_description("Open Google Calendar"),
+                ActionStep::new(
+                    "open_url",
+                    serde_json::json!({"url": "https://news.google.com"}),
+                )
+                .with_delay(1000)
+                .with_description("Open Google News"),
             ],
             enabled: false,
             created_at: Utc::now(),
@@ -85,9 +91,12 @@ pub fn get_builtin_templates() -> Vec<CustomCommand> {
             actions: vec![
                 ActionStep::new("system_control", serde_json::json!({"action": "dnd"}))
                     .with_description("Enable Do Not Disturb"),
-                ActionStep::new("open_url", serde_json::json!({"url": "https://pomofocus.io"}))
-                    .with_delay(500)
-                    .with_description("Open Pomodoro Timer"),
+                ActionStep::new(
+                    "open_url",
+                    serde_json::json!({"url": "https://pomofocus.io"}),
+                )
+                .with_delay(500)
+                .with_description("Open Pomodoro Timer"),
             ],
             enabled: false,
             created_at: Utc::now(),
@@ -133,9 +142,12 @@ pub fn get_builtin_templates() -> Vec<CustomCommand> {
             actions: vec![
                 ActionStep::new("open_app", serde_json::json!({"app": "spotify"}))
                     .with_description("Open Spotify"),
-                ActionStep::new("spotify_control", serde_json::json!({"action": "play_pause"}))
-                    .with_delay(2000)
-                    .with_description("Play Music"),
+                ActionStep::new(
+                    "spotify_control",
+                    serde_json::json!({"action": "play_pause"}),
+                )
+                .with_delay(2000)
+                .with_description("Play Music"),
             ],
             enabled: false,
             created_at: Utc::now(),
@@ -154,32 +166,34 @@ impl CustomCommandsStore {
     /// Create or open the commands database
     pub fn new() -> Result<Self, String> {
         let db_path = Self::get_db_path()?;
-        
+
         // Ensure directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create data directory: {}", e))?;
         }
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("Failed to open database: {}", e))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
-        let store = Self { conn: Mutex::new(conn) };
+        let store = Self {
+            conn: Mutex::new(conn),
+        };
         store.init_tables()?;
         Ok(store)
     }
 
     /// Get the database path
     fn get_db_path() -> Result<PathBuf, String> {
-        let data_dir = dirs_next::data_dir()
-            .ok_or_else(|| "Could not find data directory".to_string())?;
+        let data_dir =
+            dirs_next::data_dir().ok_or_else(|| "Could not find data directory".to_string())?;
         Ok(data_dir.join("ListenOS").join("commands.db"))
     }
 
     /// Initialize database tables
     fn init_tables(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS custom_commands (
@@ -196,8 +210,9 @@ impl CustomCommandsStore {
 
             CREATE INDEX IF NOT EXISTS idx_commands_trigger ON custom_commands(trigger_phrase);
             CREATE INDEX IF NOT EXISTS idx_commands_enabled ON custom_commands(enabled);
-            "
-        ).map_err(|e| format!("Failed to initialize tables: {}", e))?;
+            ",
+        )
+        .map_err(|e| format!("Failed to initialize tables: {}", e))?;
 
         Ok(())
     }
@@ -205,7 +220,7 @@ impl CustomCommandsStore {
     /// Save a custom command
     pub fn save_command(&self, cmd: &CustomCommand) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         let actions_json = serde_json::to_string(&cmd.actions)
             .map_err(|e| format!("Failed to serialize actions: {}", e))?;
 
@@ -232,34 +247,39 @@ impl CustomCommandsStore {
     /// Get all custom commands
     pub fn get_all_commands(&self) -> Result<Vec<CustomCommand>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         let mut stmt = conn.prepare(
             "SELECT id, name, trigger_phrase, description, actions, enabled, created_at, last_used, use_count
              FROM custom_commands ORDER BY name ASC"
         ).map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
-        let commands = stmt.query_map([], |row| {
-            let actions_json: String = row.get(4)?;
-            let actions: Vec<ActionStep> = serde_json::from_str(&actions_json).unwrap_or_default();
-            
-            Ok(CustomCommand {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                trigger_phrase: row.get(2)?,
-                description: row.get(3)?,
-                actions,
-                enabled: row.get::<_, i32>(5)? != 0,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                last_used: row.get::<_, Option<String>>(7)?
-                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|dt| dt.with_timezone(&Utc)),
-                use_count: row.get(8)?,
-            })
-        }).map_err(|e| format!("Failed to query commands: {}", e))?;
+        let commands = stmt
+            .query_map([], |row| {
+                let actions_json: String = row.get(4)?;
+                let actions: Vec<ActionStep> =
+                    serde_json::from_str(&actions_json).unwrap_or_default();
 
-        commands.collect::<Result<Vec<_>, _>>()
+                Ok(CustomCommand {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    trigger_phrase: row.get(2)?,
+                    description: row.get(3)?,
+                    actions,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    last_used: row
+                        .get::<_, Option<String>>(7)?
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    use_count: row.get(8)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query commands: {}", e))?;
+
+        commands
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to collect commands: {}", e))
     }
 
@@ -273,16 +293,16 @@ impl CustomCommandsStore {
     pub fn find_by_trigger(&self, phrase: &str) -> Result<Option<CustomCommand>, String> {
         let phrase_lower = phrase.to_lowercase();
         let commands = self.get_enabled_commands()?;
-        
-        Ok(commands.into_iter().find(|c| {
-            phrase_lower.contains(&c.trigger_phrase.to_lowercase())
-        }))
+
+        Ok(commands
+            .into_iter()
+            .find(|c| phrase_lower.contains(&c.trigger_phrase.to_lowercase())))
     }
 
     /// Delete a command
     pub fn delete_command(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute("DELETE FROM custom_commands WHERE id = ?1", [id])
             .map_err(|e| format!("Failed to delete command: {}", e))?;
 
@@ -292,11 +312,12 @@ impl CustomCommandsStore {
     /// Update command usage
     pub fn record_usage(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute(
             "UPDATE custom_commands SET last_used = ?1, use_count = use_count + 1 WHERE id = ?2",
             params![Utc::now().to_rfc3339(), id],
-        ).map_err(|e| format!("Failed to record usage: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to record usage: {}", e))?;
 
         Ok(())
     }
@@ -304,32 +325,32 @@ impl CustomCommandsStore {
     /// Enable/disable a command
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        
+
         conn.execute(
             "UPDATE custom_commands SET enabled = ?1 WHERE id = ?2",
             params![if enabled { 1 } else { 0 }, id],
-        ).map_err(|e| format!("Failed to update command: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to update command: {}", e))?;
 
         Ok(())
     }
 
     /// Import commands from JSON
     pub fn import_commands(&self, json: &str) -> Result<usize, String> {
-        let commands: Vec<CustomCommand> = serde_json::from_str(json)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
-        
+        let commands: Vec<CustomCommand> =
+            serde_json::from_str(json).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
         let count = commands.len();
         for cmd in commands {
             self.save_command(&cmd)?;
         }
-        
+
         Ok(count)
     }
 
     /// Export commands to JSON
     pub fn export_commands(&self) -> Result<String, String> {
         let commands = self.get_all_commands()?;
-        serde_json::to_string_pretty(&commands)
-            .map_err(|e| format!("Failed to serialize: {}", e))
+        serde_json::to_string_pretty(&commands).map_err(|e| format!("Failed to serialize: {}", e))
     }
 }

@@ -38,20 +38,20 @@ impl ClipboardContentType {
     /// Detect content type from text
     pub fn detect(text: &str) -> Self {
         let trimmed = text.trim();
-        
+
         // Check for URL
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             return Self::Url;
         }
-        
+
         // Check for email
         if trimmed.contains('@') && trimmed.contains('.') && !trimmed.contains(' ') {
             return Self::Email;
         }
-        
+
         // Check for code (simple heuristics)
-        if trimmed.contains("function ") 
-            || trimmed.contains("const ") 
+        if trimmed.contains("function ")
+            || trimmed.contains("const ")
             || trimmed.contains("let ")
             || trimmed.contains("var ")
             || trimmed.contains("def ")
@@ -62,14 +62,15 @@ impl ClipboardContentType {
         {
             return Self::Code;
         }
-        
+
         // Check for list (multiple lines starting with bullets/numbers)
         let lines: Vec<&str> = trimmed.lines().collect();
         if lines.len() > 1 {
-            let list_markers = lines.iter()
+            let list_markers = lines
+                .iter()
                 .filter(|l| {
                     let t = l.trim();
-                    t.starts_with("- ") 
+                    t.starts_with("- ")
                         || t.starts_with("* ")
                         || t.starts_with("• ")
                         || t.chars().next().map(|c| c.is_numeric()).unwrap_or(false)
@@ -79,7 +80,7 @@ impl ClipboardContentType {
                 return Self::List;
             }
         }
-        
+
         Self::Text
     }
 }
@@ -105,9 +106,11 @@ impl ClipboardService {
     /// Get current clipboard content
     pub fn get_current(&self) -> Result<String, String> {
         let mut guard = self.clipboard.lock().map_err(|e| e.to_string())?;
-        
+
         if let Some(ref mut clipboard) = *guard {
-            clipboard.get_text().map_err(|e| format!("Failed to get clipboard: {}", e))
+            clipboard
+                .get_text()
+                .map_err(|e| format!("Failed to get clipboard: {}", e))
         } else {
             Err("Clipboard not available".to_string())
         }
@@ -116,9 +119,11 @@ impl ClipboardService {
     /// Set clipboard content
     pub fn set_content(&self, text: String) -> Result<(), String> {
         let mut guard = self.clipboard.lock().map_err(|e| e.to_string())?;
-        
+
         if let Some(ref mut clipboard) = *guard {
-            clipboard.set_text(&text).map_err(|e| format!("Failed to set clipboard: {}", e))
+            clipboard
+                .set_text(&text)
+                .map_err(|e| format!("Failed to set clipboard: {}", e))
         } else {
             Err("Clipboard not available".to_string())
         }
@@ -152,7 +157,7 @@ impl ClipboardService {
         }
 
         self.last_content = Some(content.clone());
-        
+
         let entry = ClipboardEntry {
             id: uuid::Uuid::new_v4().to_string(),
             content_type: ClipboardContentType::detect(&content),

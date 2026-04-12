@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   isTauri,
+  getStatus,
   startListening,
   stopListening,
   getPendingAction,
@@ -34,10 +35,12 @@ export default function AssistantPage() {
   const [notification, setNotification] = useState<NotificationType>(null);
   const [learnedWord, setLearnedWord] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const stateRef = useRef<AssistantState>("idle");
   const rawAudioLevelRef = useRef(0);
   const wavePhaseRef = useRef(0);
   const audioLevelInterval = useRef<NodeJS.Timeout | null>(null);
+  const statusInterval = useRef<NodeJS.Timeout | null>(null);
   const isStartingRef = useRef(false);
   const pendingStopRef = useRef(false);
 
@@ -130,6 +133,47 @@ export default function AssistantPage() {
     return () => { if (audioLevelInterval.current) clearTimeout(audioLevelInterval.current); };
   }, [state]);
 
+  useEffect(() => {
+    if (!(state === "listening" || state === "handsfree" || state === "processing") || !isTauri()) {
+      if (statusInterval.current) clearTimeout(statusInterval.current);
+      return;
+    }
+
+    let stopped = false;
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const status = await getStatus();
+        if (stopped) return;
+
+        if (status.audio_status.phase === "Recovering") {
+          setStatusNotice("Recovering microphone");
+        } else if (stateRef.current === "processing") {
+          const phase = status.delivery_status.phase;
+          if (phase === "Retrying" || phase === "Verifying" || phase === "Injecting") {
+            setStatusNotice(status.delivery_status.summary);
+          } else if (phase !== "RecoverableFailure") {
+            setStatusNotice(null);
+          }
+        } else if (statusNotice === "Recovering microphone") {
+          setStatusNotice(null);
+        }
+      } catch {
+        // Ignore transient polling errors while the backend is busy.
+      }
+
+      if (!stopped) {
+        statusInterval.current = setTimeout(poll, 160);
+      }
+    };
+
+    void poll();
+    return () => {
+      stopped = true;
+      if (statusInterval.current) clearTimeout(statusInterval.current);
+    };
+  }, [state, statusNotice]);
+
   /* ---------------------------------------------------------------- */
   /*  Actions                                                          */
   /* ---------------------------------------------------------------- */
@@ -139,6 +183,23 @@ export default function AssistantPage() {
     setState("processing");
     try {
       const result = await stopListening(dictationOnly);
+      const delivery = result.delivery_status;
+
+      if (delivery.phase === "RecoverableFailure") {
+        setStatusNotice(delivery.summary);
+        setState("error");
+        setTimeout(() => {
+          setStatusNotice(null);
+          setState("idle");
+        }, 2600);
+        return;
+      }
+
+      if (delivery.attempts > 1 || delivery.recovered_to_clipboard) {
+        setStatusNotice(delivery.summary);
+        setTimeout(() => setStatusNotice(null), 2400);
+      }
+
       if (result.action?.action_type === "NoAction") { setState("idle"); return; }
       const isConvo = result.action?.action_type === "Respond" || result.action?.action_type === "Clarify";
       if (result.action?.requires_confirmation) {
@@ -244,6 +305,20 @@ export default function AssistantPage() {
           >
             <div className="w-2 h-2 rounded-full bg-green-400 keep-bg" />
             <span className="text-[10px] text-white/80 truncate max-w-36">{learnedWord}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {statusNotice && !pendingAction && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.96 }}
+            className="absolute bottom-full mb-3 max-w-[320px] px-3 py-2 rounded-2xl keep-bg"
+            style={{ background: "rgba(20,20,20,0.94)", border: "1px solid rgba(255,255,255,0.1)" }}
+          >
+            <span className="text-[11px] text-white/80">{statusNotice}</span>
           </motion.div>
         )}
       </AnimatePresence>
