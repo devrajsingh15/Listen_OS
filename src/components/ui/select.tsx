@@ -64,7 +64,7 @@ export const selectVariants = tv({
     hasError: {
       true: {
         triggerRoot:
-          "border-red-400 focus:border-red-400 focus:ring-2 focus:ring-red-400/20",
+          "border-danger focus:border-danger focus:ring-2 focus:ring-danger/20",
       },
     },
   },

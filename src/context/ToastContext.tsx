@@ -96,11 +96,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const getToastStyles = (type: ToastType) => {
     switch (type) {
       case "success":
-        return "bg-green-500 text-white";
+        return "border border-success-border bg-success-surface text-success-text";
       case "error":
-        return "bg-red-500 text-white";
+        return "border border-danger-border bg-danger-surface text-danger";
       case "warning":
-        return "bg-yellow-500 text-white";
+        return "border border-warning-border bg-warning-surface text-warning";
       default:
         return "bg-card text-foreground border border-border";
     }

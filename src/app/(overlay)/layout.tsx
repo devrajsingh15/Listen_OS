@@ -1,3 +1,4 @@
+import { GeistSans } from "geist/font/sans";
 import "../globals.css";
 
 export default function OverlayLayout({
@@ -6,7 +7,7 @@ export default function OverlayLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="assistant-mode" suppressHydrationWarning>
+    <html lang="en" className={`assistant-mode ${GeistSans.variable}`} suppressHydrationWarning>
       <head>
         <meta name="color-scheme" content="dark" />
         {/* Force-hide Next.js dev indicator in the assistant window */}

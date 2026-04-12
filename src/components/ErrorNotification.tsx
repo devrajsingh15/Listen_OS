@@ -15,13 +15,13 @@ const errorTypeLabels: Record<ErrorType, string> = {
 };
 
 const errorTypeColors: Record<ErrorType, string> = {
-  Transcription: "text-orange-400",
-  LLMProcessing: "text-yellow-400",
-  ActionExecution: "text-red-400",
-  AudioCapture: "text-orange-400",
-  Network: "text-red-400",
-  RateLimit: "text-yellow-400",
-  Unknown: "text-red-400",
+  Transcription: "text-warning",
+  LLMProcessing: "text-warning",
+  ActionExecution: "text-danger",
+  AudioCapture: "text-warning",
+  Network: "text-danger",
+  RateLimit: "text-warning",
+  Unknown: "text-danger",
 };
 
 export function ErrorNotification() {
@@ -75,7 +75,7 @@ export function ErrorNotification() {
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
             onClick={() => setExpanded(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-red-500/20 border border-red-500/40 rounded-lg text-red-400 hover:bg-red-500/30 transition-colors"
+            className="flex items-center gap-2 rounded-lg border border-danger-border bg-danger-surface px-4 py-2 text-danger transition-opacity hover:opacity-85"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -88,9 +88,9 @@ export function ErrorNotification() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className="bg-card border border-border rounded-lg shadow-xl overflow-hidden"
+            className="overflow-hidden rounded-lg border border-border bg-card shadow-xl"
           >
-            <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-sidebar">
+            <div className="flex items-center justify-between border-b border-border bg-sidebar-bg px-4 py-2">
               <span className="text-sm font-medium text-foreground">Recent Errors</span>
               <div className="flex items-center gap-2">
                 <button
