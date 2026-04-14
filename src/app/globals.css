@@ -94,6 +94,12 @@
   --radius-xl: 1rem;
 }
 
+/* ---- Animated gradient border for assistant pill ---- */
+@keyframes spin-gradient {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

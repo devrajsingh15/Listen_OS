@@ -292,16 +292,13 @@ export default function AssistantPage() {
   const pillWidth = state === "handsfree" ? 148 : state === "listening" ? 110 : state === "processing" ? 80 : state === "success" || state === "error" ? 52 : 44;
   const pillHeight = state === "idle" ? 22 : 28;
 
-  /* Glow color per state */
-  const glowColor = state === "listening" || state === "handsfree"
-    ? "rgba(99,130,255,0.45)"
-    : state === "processing"
-    ? "rgba(180,160,255,0.3)"
-    : state === "success"
-    ? "rgba(74,222,128,0.5)"
-    : state === "error"
-    ? "rgba(248,113,113,0.5)"
-    : "rgba(0,0,0,0)";
+  /* Gradient border animation speed per state */
+  const borderSpeed = state === "processing" ? "1.8s" : "3s";
+
+  /* Audio-reactive glow intensity for listening/handsfree */
+  const glowIntensity = (state === "listening" || state === "handsfree")
+    ? 0.25 + audioLevel * 0.35
+    : isActive ? 0.3 : 0;
 
   return (
     <div className="h-full w-full flex flex-col items-center justify-end pb-2 relative" style={{ background: "transparent" }}>
@@ -366,37 +363,75 @@ export default function AssistantPage() {
         transition={PILL_SPRING}
         onClick={() => { if (state === "idle") start(true); }}
       >
-        {/* Outer glow */}
+        {/* Soft multi-color glow (trimmed bottom to avoid clipping flatten) */}
         <motion.div
-          className="absolute keep-bg rounded-full"
+          className="absolute rounded-full overflow-hidden keep-bg"
           style={{
-            inset: -4,
+            top: -3,
+            right: -3,
+            left: -3,
+            bottom: -0.5,
             filter: "blur(8px)",
             pointerEvents: "none",
+            willChange: "opacity",
           }}
-          animate={{ backgroundColor: glowColor }}
-          transition={{ duration: 0.3 }}
-        />
-
-        {/* Pill body */}
-        <div
-          className="absolute inset-0 rounded-full keep-bg overflow-hidden"
-          style={{
-            background: "rgba(18, 18, 22, 0.95)",
-            border: "1px solid rgba(255,255,255,0.10)",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
-          }}
+          animate={{ opacity: glowIntensity }}
+          transition={{ duration: 0.35, ease: "linear" }}
         >
-          {/* Active gradient border overlay */}
-          <motion.div
-            className="absolute inset-0 rounded-full keep-bg"
+          <div
             style={{
-              background: "linear-gradient(135deg, rgba(99,130,255,0.15), rgba(180,100,255,0.1), rgba(255,180,80,0.08))",
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              width: "165%",
+              aspectRatio: "1",
+              borderRadius: "50%",
+              background: "conic-gradient(#f43f5e, #a855f7, #3b82f6, #06b6d4, #10b981, #eab308, #f43f5e)",
+              animation: `spin-gradient ${borderSpeed} linear infinite`,
+              transform: "translate(-50%, -50%) translateZ(0)",
+              willChange: "transform",
+              backfaceVisibility: "hidden",
             }}
-            animate={{ opacity: isActive ? 1 : 0 }}
-            transition={{ duration: 0.2 }}
           />
-        </div>
+        </motion.div>
+
+        {/* Rotating gradient border (constant 2px inner ring) */}
+        <motion.div
+          className="absolute inset-0 rounded-full overflow-hidden keep-bg"
+          style={{ pointerEvents: "none", willChange: "opacity" }}
+          animate={{ opacity: isActive ? 1 : 0 }}
+          transition={{ duration: 0.22 }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              width: "165%",
+              aspectRatio: "1",
+              borderRadius: "50%",
+              background: "conic-gradient(#f43f5e, #ec4899, #a855f7, #6366f1, #3b82f6, #06b6d4, #10b981, #22c55e, #eab308, #f59e0b, #ef4444, #f43f5e)",
+              animation: `spin-gradient ${borderSpeed} linear infinite`,
+              transform: "translate(-50%, -50%) translateZ(0)",
+              willChange: "transform",
+              backfaceVisibility: "hidden",
+            }}
+          />
+        </motion.div>
+
+        {/* Pill body (inset by 2px in active mode for a perfectly even border thickness) */}
+        <motion.div
+          className="absolute rounded-full keep-bg overflow-hidden"
+          initial={false}
+          animate={{ inset: isActive ? 2 : 0 }}
+          transition={{ duration: 0.22, ease: "easeOut" }}
+          style={{
+            background: "rgba(18, 18, 22, 0.97)",
+            border: isActive ? "none" : "1px solid rgba(255,255,255,0.10)",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
+            willChange: "inset",
+          }}
+        />
 
         {/* Content */}
         <div className="relative z-10 flex h-full w-full items-center justify-center overflow-hidden rounded-full">
