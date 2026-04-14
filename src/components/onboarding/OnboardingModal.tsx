@@ -238,7 +238,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
               </p>
               <button
                 onClick={nextStep}
-                className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white hover:bg-primary/90"
+                className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-background hover:bg-primary/90"
               >
                 Get Started
               </button>
@@ -312,7 +312,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                 <button
                   onClick={() => void handleMicrophoneContinue()}
                   disabled={!selectedDevice}
-                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90 disabled:opacity-50"
                 >
                   Continue
                 </button>
@@ -357,7 +357,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                 <button
                   onClick={() => void handleApiKeyContinue()}
                   disabled={apiSettingsSaving || groqApiKey.trim().length === 0}
-                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90 disabled:opacity-50"
                 >
                   {apiSettingsSaving ? "Saving..." : "Continue"}
                 </button>
@@ -432,7 +432,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                 </button>
                 <button
                   onClick={nextStep}
-                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
+                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
                 >
                   {testSuccess ? "Continue" : "Skip"}
                 </button>
@@ -483,7 +483,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                         : "border-border"
                     }`}>
                       {selectedTemplates.has(template.id) && (
-                        <svg className="h-2.5 w-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="h-2.5 w-2.5 text-background" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                         </svg>
                       )}
@@ -501,7 +501,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
                 </button>
                 <button
                   onClick={nextStep}
-                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90"
+                  className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background hover:bg-primary/90"
                 >
                   Continue
                 </button>
@@ -549,7 +549,7 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
 
               <button
                 onClick={handleComplete}
-                className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white hover:bg-primary/90"
+                className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-background hover:bg-primary/90"
               >
                 Start Using ListenOS
               </button>
@@ -560,3 +560,4 @@ export function OnboardingModal({ isOpen, onComplete }: OnboardingModalProps) {
     </div>
   );
 }
+

@@ -9,14 +9,11 @@ import {
   ChatRound,
   ClipboardText,
   Command,
-  Gift,
   HomeSmile,
   PlugCircle,
-  QuestionCircle,
   Scissors,
   Settings,
   Text,
-  UsersGroupRounded,
 } from "@solar-icons/react";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/tauri";
@@ -134,27 +131,9 @@ export function Sidebar({ onSettingsClick }: SidebarProps) {
       <div className="border-t border-border px-3 py-3">
         <ul className="space-y-1">
           <li>
-            <button className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
-              <UsersGroupRounded size={18} weight="Bold" className="shrink-0" />
-              <span>Invite your team</span>
-            </button>
-          </li>
-          <li>
-            <button className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
-              <Gift size={18} weight="Bold" className="shrink-0" />
-              <span>Get a free month</span>
-            </button>
-          </li>
-          <li>
             <button onClick={onSettingsClick} className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
               <Settings size={18} weight="Bold" className="shrink-0" />
               <span>Settings</span>
-            </button>
-          </li>
-          <li>
-            <button className={cn(navItemBaseClass, "text-muted hover:text-primary")}>
-              <QuestionCircle size={18} weight="Bold" className="shrink-0" />
-              <span>Help</span>
             </button>
           </li>
         </ul>

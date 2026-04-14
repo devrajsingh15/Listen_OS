@@ -583,8 +583,8 @@ pub fn run() {
                 }
             });
 
-            // Ensure autostart is always enabled so the assistant resumes after reboot/login.
-            {
+            // In dev/debug builds, avoid writing persistent OS startup entries.
+            if !cfg!(debug_assertions) {
                 use tauri_plugin_autostart::ManagerExt;
                 let manager = app.autolaunch();
                 if let Err(e) = manager.enable() {
@@ -596,6 +596,8 @@ pub fn run() {
                         log::warn!("Autostart enable call returned but state is disabled");
                     }
                 }
+            } else {
+                log::info!("Skipping autostart enforcement in debug/dev build");
             }
 
             log::info!("ListenOS setup complete - dual-window architecture ready");
