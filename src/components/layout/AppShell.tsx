@@ -26,19 +26,20 @@ const PAGE_TITLES: Record<string, string> = {
   "/tone": "Style",
 };
 
-// Check onboarding status synchronously to avoid flash
-function getInitialOnboardingState(): boolean {
-  if (typeof window === "undefined") return false;
-  return !localStorage.getItem(ONBOARDING_COMPLETE_KEY);
-}
-
 function AppShellContent({ children }: AppShellProps) {
+  const [mounted, setMounted] = useState(false);
+  const [tauriDesktop, setTauriDesktop] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [showOnboarding, setShowOnboarding] = useState(getInitialOnboardingState);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const pathname = usePathname();
   const pageTitle = PAGE_TITLES[pathname] ?? "Workspace";
-  const tauriDesktop = isTauri();
+
+  useEffect(() => {
+    setMounted(true);
+    setTauriDesktop(isTauri());
+    setShowOnboarding(!localStorage.getItem(ONBOARDING_COMPLETE_KEY));
+  }, []);
 
   useEffect(() => {
     // Check for updates on startup
@@ -171,10 +172,7 @@ function AppShellContent({ children }: AppShellProps) {
       />
 
       {/* Onboarding Modal */}
-      <OnboardingModal
-        isOpen={showOnboarding}
-        onComplete={handleOnboardingComplete}
-      />
+      <OnboardingModal isOpen={mounted && showOnboarding} onComplete={handleOnboardingComplete} />
     </>
   );
 }
